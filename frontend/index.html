@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reversal Detection Pro v3.0</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- HEADER -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <header class="app-header">
+        <div class="header-left">
+            <div class="logo">
+                <span class="logo-icon">◆</span>
+                <span class="logo-text">REVERSAL PRO</span>
+                <span class="logo-version">v3.0</span>
+            </div>
+            <span class="badge badge-success">NON-REPAINTING</span>
+        </div>
+        <div class="header-center">
+            <div class="symbol-selector">
+                <select id="symbolSelect">
+                    <option value="BTC/USDT">BTC/USDT</option>
+                    <option value="ETH/USDT">ETH/USDT</option>
+                    <option value="SOL/USDT">SOL/USDT</option>
+                    <option value="BNB/USDT">BNB/USDT</option>
+                </select>
+            </div>
+            <div class="timeframe-buttons" id="timeframeButtons">
+                <button class="tf-btn" data-tf="1m">1m</button>
+                <button class="tf-btn" data-tf="5m">5m</button>
+                <button class="tf-btn" data-tf="15m">15m</button>
+                <button class="tf-btn active" data-tf="1h">1H</button>
+                <button class="tf-btn" data-tf="4h">4H</button>
+                <button class="tf-btn" data-tf="1d">1D</button>
+            </div>
+        </div>
+        <div class="header-right">
+            <button class="btn btn-live" id="liveBtn" title="Auto-refresh at timeframe interval">
+                <span class="live-indicator"></span>
+                LIVE
+            </button>
+            <button class="btn btn-primary" id="refreshBtn" title="Fetch & Analyze">
+                ⟳ Refresh
+            </button>
+            <button class="btn btn-outline" id="fetchExchangeBtn" title="Fetch from exchange">
+                ↓ Fetch
+            </button>
+            <button class="btn btn-outline" id="uploadBtn" title="Upload CSV">
+                ↑ CSV
+            </button>
+            <input type="file" id="csvFileInput" accept=".csv" style="display:none" />
+        </div>
+    </header>
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- CONTROLS BAR -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <div class="controls-bar">
+        <div class="control-group">
+            <label>Sensitivity</label>
+            <select id="sensitivitySelect">
+                <option value="Very High">Very High</option>
+                <option value="High">High</option>
+                <option value="Medium" selected>Medium</option>
+                <option value="Low">Low</option>
+                <option value="Very Low">Very Low</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label>Signal Mode</label>
+            <select id="signalModeSelect">
+                <option value="Confirmed Only" selected>Confirmed Only</option>
+                <option value="Confirmed + Preview">Confirmed + Preview</option>
+                <option value="Preview Only">Preview Only</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label>Bars</label>
+            <select id="limitSelect">
+                <option value="200">200</option>
+                <option value="500" selected>500</option>
+                <option value="1000">1000</option>
+                <option value="2000">2000</option>
+            </select>
+        </div>
+
+        <!-- Position Tools -->
+        <div class="control-group">
+            <button class="btn-tool" id="longToolBtn" title="Long Position Tool">
+                ▲ LONG
+            </button>
+            <button class="btn-tool" id="shortToolBtn" title="Short Position Tool">
+                ▼ SHORT
+            </button>
+            <button class="btn-tool-clear" id="clearPositionBtn" title="Clear Position">
+                ✕
+            </button>
+        </div>
+
+        <!-- Info panel -->
+        <div class="info-panel" id="infoPanel">
+            <div class="info-item">
+                <span class="info-label">Trend</span>
+                <span class="info-value" id="trendValue">—</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">ATR</span>
+                <span class="info-value" id="atrValue">—</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Threshold</span>
+                <span class="info-value" id="thresholdValue">—</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Signals</span>
+                <span class="info-value" id="signalsCount">—</span>
+            </div>
+        </div>
+
+        <!-- Position Stats Panel -->
+        <div class="position-stats" id="positionStats" style="display: none;">
+            <div class="stats-item">
+                <span class="stats-label">Entry:</span>
+                <span class="stats-value" id="statsEntry">—</span>
+            </div>
+            <div class="stats-item">
+                <span class="stats-label">TP:</span>
+                <span class="stats-value" id="statsTP">—</span>
+            </div>
+            <div class="stats-item">
+                <span class="stats-label">SL:</span>
+                <span class="stats-value" id="statsSL">—</span>
+            </div>
+            <div class="stats-item highlight">
+                <span class="stats-label">Risk/Reward:</span>
+                <span class="stats-value" id="statsRR">—</span>
+            </div>
+            <div class="stats-item">
+                <span class="stats-label">Profit:</span>
+                <span class="stats-value green" id="statsProfit">—</span>
+            </div>
+            <div class="stats-item">
+                <span class="stats-label">Risk:</span>
+                <span class="stats-value red" id="statsRisk">—</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- MAIN CONTENT -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <main class="main-content">
+        <!-- Chart container -->
+        <div class="chart-wrapper">
+            <div id="chartContainer" class="chart-container"></div>
+            <div id="chartLegend" class="chart-legend">
+                <span class="legend-item"><span class="legend-dot dot-ema9"></span>EMA 9</span>
+                <span class="legend-item"><span class="legend-dot dot-ema14"></span>EMA 14</span>
+                <span class="legend-item"><span class="legend-dot dot-ema21"></span>EMA 21</span>
+            </div>
+        </div>
+
+        <!-- Signals sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h3>Signals</h3>
+                <button class="btn-icon" id="toggleSidebar" title="Toggle">☰</button>
+            </div>
+            <div class="signals-list" id="signalsList">
+                <div class="empty-state">Load data to see signals</div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- STATUS BAR -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <footer class="status-bar">
+        <span id="statusText">Ready</span>
+        <span id="statusTime"></span>
+    </footer>
+
+    <!-- Loading overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+        <span>Analyzing...</span>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>

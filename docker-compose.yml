@@ -1,0 +1,109 @@
+# ============================================================================
+# Reversal Detection Pro v3.0 — Docker Compose Stack
+# ============================================================================
+#
+# Services:
+#   1. timescaledb  — PostgreSQL + TimescaleDB (time-series storage)
+#   2. redis        — In-memory cache
+#   3. backend      — FastAPI Python API
+#   4. frontend     — Vite + TradingView Lightweight Charts (served via nginx)
+#
+# Usage:
+#   docker compose up -d --build          # Start all services
+#   docker compose logs -f backend        # Follow backend logs
+#   docker compose down -v                # Stop & remove volumes
+#
+# Access:
+#   Frontend:  http://localhost:8080
+#   API docs:  http://localhost:8080/docs
+#   API direct: http://localhost:8000
+#
+# ============================================================================
+
+services:
+  # ────────────────────────────────────────────────────────────
+  # TimescaleDB — Time-series database (PostgreSQL extension)
+  # ────────────────────────────────────────────────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: reversal_timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: reversal
+      POSTGRES_PASSWORD: reversal_pro_2025
+      POSTGRES_DB: reversaldb
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reversal -d reversaldb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ────────────────────────────────────────────────────────────
+  # Redis — Cache layer
+  # ────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: reversal_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ────────────────────────────────────────────────────────────
+  # Backend — FastAPI (Python)
+  # ────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: reversal_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://reversal:reversal_pro_2025@timescaledb:5432/reversaldb"
+      DATABASE_URL_SYNC: "postgresql+psycopg2://reversal:reversal_pro_2025@timescaledb:5432/reversaldb"
+      REDIS_URL: "redis://redis:6379/0"
+      CORS_ORIGINS: '["http://localhost:8080","http://localhost:3000","http://frontend:3000"]'
+      DEFAULT_EXCHANGE: "binance"
+      AUTO_REFRESH_ENABLED: "true"
+      AUTO_REFRESH_INTERVAL_MINUTES: "5"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data:ro
+
+  # ────────────────────────────────────────────────────────────
+  # Frontend — Vite build + Nginx reverse proxy
+  # ────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: reversal_frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  timescale_data:
+    driver: local
+  redis_data:
+    driver: local

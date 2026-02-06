@@ -1,0 +1,2 @@
+- utilisation de Redis. attention : ajouter le mode debug pour vider le cache pour les tests pendant les developpements.
+- ajouter les envois de signaux via telegram

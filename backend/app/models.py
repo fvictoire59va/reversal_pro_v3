@@ -1,0 +1,106 @@
+"""SQLAlchemy ORM models matching TimescaleDB schema."""
+
+from datetime import datetime
+from sqlalchemy import (
+    Column, String, Float, Boolean, Integer, DateTime, Text,
+    PrimaryKeyConstraint, Index,
+)
+from .database import Base
+
+
+class OHLCV(Base):
+    __tablename__ = "ohlcv"
+
+    time = Column(DateTime(timezone=True), nullable=False)
+    symbol = Column(String, nullable=False)
+    timeframe = Column(String, nullable=False, default="1h")
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False, default=0)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("time", "symbol", "timeframe"),
+    )
+
+
+class Indicator(Base):
+    __tablename__ = "indicators"
+
+    time = Column(DateTime(timezone=True), nullable=False)
+    symbol = Column(String, nullable=False)
+    timeframe = Column(String, nullable=False, default="1h")
+    ema_9 = Column(Float)
+    ema_14 = Column(Float)
+    ema_21 = Column(Float)
+    atr = Column(Float)
+    trend = Column(String)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("time", "symbol", "timeframe"),
+    )
+
+
+class Signal(Base):
+    __tablename__ = "signals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    time = Column(DateTime(timezone=True), nullable=False)
+    symbol = Column(String, nullable=False)
+    timeframe = Column(String, nullable=False, default="1h")
+    bar_index = Column(Integer, nullable=False)
+    price = Column(Float, nullable=False)
+    actual_price = Column(Float, nullable=False)
+    is_bullish = Column(Boolean, nullable=False)
+    is_preview = Column(Boolean, nullable=False, default=False)
+    signal_label = Column(String, nullable=False, default="REVERSAL")
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Zone(Base):
+    __tablename__ = "zones"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    time = Column(DateTime(timezone=True), nullable=False)
+    symbol = Column(String, nullable=False)
+    timeframe = Column(String, nullable=False, default="1h")
+    zone_type = Column(String, nullable=False)
+    center_price = Column(Float, nullable=False)
+    top_price = Column(Float, nullable=False)
+    bottom_price = Column(Float, nullable=False)
+    start_bar = Column(Integer, nullable=False)
+    end_bar = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class AnalysisRun(Base):
+    __tablename__ = "analysis_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False)
+    timeframe = Column(String, nullable=False)
+    sensitivity = Column(String, nullable=False, default="Medium")
+    signal_mode = Column(String, nullable=False, default="Confirmed Only")
+    atr_multiplier = Column(Float)
+    current_atr = Column(Float)
+    threshold = Column(Float)
+    current_trend = Column(String)
+    total_signals = Column(Integer, default=0)
+    total_zones = Column(Integer, default=0)
+    bars_analyzed = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Watchlist(Base):
+    __tablename__ = "watchlist"
+
+    symbol = Column(String, nullable=False)
+    timeframe = Column(String, nullable=False, default="1h")
+    exchange = Column(String, nullable=False, default="binance")
+    is_active = Column(Boolean, nullable=False, default=True)
+    added_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("symbol", "timeframe"),
+    )

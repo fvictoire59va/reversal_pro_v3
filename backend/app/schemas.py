@@ -138,3 +138,83 @@ class WatchlistItem(BaseModel):
 
 class WatchlistResponse(BaseModel):
     items: List[WatchlistItem]
+
+
+# ── Agent Broker ────────────────────────────────────────────
+class AgentCreate(BaseModel):
+    symbol: str = "BTC/USDT"
+    timeframe: str = "1h"
+    trade_amount: float = Field(default=100.0, gt=0)
+    mode: str = Field(default="paper", pattern="^(paper|live)$")
+    sensitivity: str = "Medium"
+    signal_mode: str = "Confirmed Only"
+    analysis_limit: int = Field(default=500, ge=50, le=5000)
+
+
+class AgentUpdate(BaseModel):
+    trade_amount: Optional[float] = None
+    mode: Optional[str] = None
+    sensitivity: Optional[str] = None
+    signal_mode: Optional[str] = None
+    analysis_limit: Optional[int] = None
+
+
+class AgentResponse(BaseModel):
+    id: int
+    name: str
+    symbol: str
+    timeframe: str
+    trade_amount: float
+    is_active: bool
+    mode: str
+    sensitivity: str = "Medium"
+    signal_mode: str = "Confirmed Only"
+    analysis_limit: int = 500
+    created_at: datetime
+    updated_at: datetime
+    open_positions: int = 0
+    total_pnl: float = 0.0
+
+    class Config:
+        from_attributes = True
+
+
+class PositionResponse(BaseModel):
+    id: int
+    agent_id: int
+    agent_name: str = ""
+    symbol: str
+    side: str
+    entry_price: float
+    exit_price: Optional[float] = None
+    stop_loss: float
+    take_profit: Optional[float] = None
+    quantity: float
+    status: str
+    pnl: Optional[float] = None
+    pnl_percent: Optional[float] = None
+    opened_at: datetime
+    closed_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AgentLogResponse(BaseModel):
+    id: int
+    agent_id: int
+    action: str
+    details: Optional[dict] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AgentsOverview(BaseModel):
+    agents: List[AgentResponse]
+    open_positions: List[PositionResponse]
+    total_agents: int
+    active_agents: int
+    total_open_positions: int
+    total_realized_pnl: float

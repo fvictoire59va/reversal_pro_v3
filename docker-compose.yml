@@ -79,7 +79,13 @@ services:
       CORS_ORIGINS: '["http://localhost:8080","http://localhost:3000","http://frontend:3000"]'
       DEFAULT_EXCHANGE: "binance"
       AUTO_REFRESH_ENABLED: "true"
-      AUTO_REFRESH_INTERVAL_MINUTES: "5"
+      AUTO_REFRESH_INTERVAL_MINUTES: "${AUTO_REFRESH_INTERVAL_MINUTES:-5}"
+      AGENT_CYCLE_INTERVAL_MINUTES: "${AGENT_CYCLE_INTERVAL_MINUTES:-1}"
+      HYPERLIQUID_WALLET_ADDRESS: "${HYPERLIQUID_WALLET_ADDRESS:-}"
+      HYPERLIQUID_API_SECRET: "${HYPERLIQUID_API_SECRET:-}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      TELEGRAM_ENABLED: "${TELEGRAM_ENABLED:-false}"
     depends_on:
       timescaledb:
         condition: service_healthy

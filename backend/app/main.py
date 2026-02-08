@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
-from .routes import ohlcv, analysis, watchlist
+from .routes import ohlcv, analysis, watchlist, agents, telegram
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI):
         try:
             from apscheduler.schedulers.asyncio import AsyncIOScheduler
             from .services.data_ingestion import ingestion_service
+            from .services.agent_broker import agent_broker_service
             from .database import async_session
 
             scheduler = AsyncIOScheduler()
@@ -44,15 +45,56 @@ async def lifespan(app: FastAPI):
                     except Exception as e:
                         logger.error(f"Auto-refresh error: {e}")
 
+            async def auto_analyze_and_run_agents():
+                """Re-run analysis for all watchlist symbols, then run agents."""
+                async with async_session() as db:
+                    try:
+                        from .services.analysis_service import analysis_service
+                        from .schemas import AnalysisRequest
+                        from sqlalchemy import text
+
+                        # Get all active watchlist items
+                        result = await db.execute(
+                            text("SELECT symbol, timeframe FROM watchlist WHERE is_active = TRUE")
+                        )
+                        rows = result.fetchall()
+
+                        # Re-run analysis for each
+                        for row in rows:
+                            try:
+                                request = AnalysisRequest(symbol=row[0], timeframe=row[1])
+                                await analysis_service.run_analysis(db, request)
+                            except Exception as e:
+                                logger.warning(f"Auto-analysis error for {row[0]} {row[1]}: {e}")
+
+                        # Run all active agents
+                        await agent_broker_service.run_all_active_agents(db)
+                        logger.info("Agent broker cycle completed")
+
+                    except Exception as e:
+                        logger.error(f"Auto-analyze/agents error: {e}")
+
             scheduler.add_job(
                 auto_fetch, "interval",
                 minutes=settings.auto_refresh_interval_minutes,
                 id="auto_fetch",
             )
+
+            # Agent cycle runs 1 minute after fetch to allow data to settle
+            scheduler.add_job(
+                auto_analyze_and_run_agents, "interval",
+                minutes=settings.agent_cycle_interval_minutes,
+                id="agent_cycle",
+            )
+
             scheduler.start()
             logger.info(
                 f"Auto-refresh scheduler started "
                 f"(every {settings.auto_refresh_interval_minutes} min)"
+            )
+            logger.info(
+                f"Agent broker scheduler started "
+                f"(every {settings.agent_cycle_interval_minutes} min)"
             )
         except Exception as e:
             logger.warning(f"Scheduler not started: {e}")
@@ -84,6 +126,8 @@ app.add_middleware(
 app.include_router(ohlcv.router)
 app.include_router(analysis.router)
 app.include_router(watchlist.router)
+app.include_router(agents.router)
+app.include_router(telegram.router)
 
 
 @app.get("/")

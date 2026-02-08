@@ -178,6 +178,131 @@
     </main>
 
     <!-- ═══════════════════════════════════════════════════════ -->
+    <!-- AGENT BROKER PANEL -->
+    <!-- ═══════════════════════════════════════════════════════ -->
+    <section class="agent-broker-panel" id="agentBrokerPanel">
+        <!-- Agent Broker Header -->
+        <div class="agent-broker-header">
+            <div class="agent-broker-title">
+                <span class="agent-icon">🤖</span>
+                <h3>AGENT BROKER</h3>
+                <span class="agent-badge" id="activeAgentsBadge">0 active</span>
+                <span class="agent-pnl-total" id="totalPnlBadge">PnL: $0.00</span>
+            </div>
+            <div class="agent-broker-actions">
+                <button class="btn btn-outline btn-sm" id="refreshAgentsBtn" title="Refresh agents">
+                    ⟳
+                </button>
+                <button class="btn btn-primary btn-sm" id="toggleCreateAgent" title="New Agent">
+                    + Agent
+                </button>
+            </div>
+        </div>
+
+        <!-- Create Agent Form (hidden by default) -->
+        <div class="create-agent-form" id="createAgentForm" style="display: none;">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Symbol</label>
+                    <select id="agentSymbol">
+                        <option value="BTC/USDT">BTC/USDT</option>
+                        <option value="ETH/USDT">ETH/USDT</option>
+                        <option value="SOL/USDT">SOL/USDT</option>
+                        <option value="BNB/USDT">BNB/USDT</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Timeframe</label>
+                    <select id="agentTimeframe">
+                        <option value="1m">1m</option>
+                        <option value="5m">5m</option>
+                        <option value="15m">15m</option>
+                        <option value="1h" selected>1h</option>
+                        <option value="4h">4h</option>
+                        <option value="1d">1d</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Amount (€)</label>
+                    <input type="number" id="agentAmount" value="100" min="1" step="10" />
+                </div>
+                <div class="form-group">
+                    <label>Mode</label>
+                    <select id="agentMode">
+                        <option value="paper" selected>📄 Paper</option>
+                        <option value="live">🔴 Live</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Sensitivity</label>
+                    <select id="agentSensitivity">
+                        <option value="Very High">Very High</option>
+                        <option value="High">High</option>
+                        <option value="Medium" selected>Medium</option>
+                        <option value="Low">Low</option>
+                        <option value="Very Low">Very Low</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Signal Mode</label>
+                    <select id="agentSignalMode">
+                        <option value="Confirmed Only" selected>Confirmed Only</option>
+                        <option value="Confirmed + Preview">Confirmed + Preview</option>
+                        <option value="Preview Only">Preview Only</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Bars</label>
+                    <select id="agentLimit">
+                        <option value="200">200</option>
+                        <option value="500" selected>500</option>
+                        <option value="1000">1000</option>
+                        <option value="2000">2000</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary" id="createAgentBtn">Créer</button>
+                <button class="btn btn-outline" id="cancelCreateAgent">Annuler</button>
+            </div>
+        </div>
+
+        <!-- Agents List -->
+        <div class="agents-list" id="agentsList">
+            <!-- Dynamic content -->
+        </div>
+
+        <!-- Open Positions Table -->
+        <div class="positions-section">
+            <div class="positions-header">
+                <h4>📋 Positions ouvertes</h4>
+            </div>
+            <div class="positions-table-wrapper">
+                <table class="positions-table" id="positionsTable">
+                    <thead>
+                        <tr>
+                            <th>Agent</th>
+                            <th>Side</th>
+                            <th>Symbol</th>
+                            <th>Entrée</th>
+                            <th>SL</th>
+                            <th>TP</th>
+                            <th>Qty</th>
+                            <th>PnL</th>
+                            <th>Ouverture</th>
+                            <th>Durée</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positionsBody">
+                        <tr class="empty-row">
+                            <td colspan="11">Aucune position ouverte</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════ -->
     <!-- STATUS BAR -->
     <!-- ═══════════════════════════════════════════════════════ -->
     <footer class="status-bar">

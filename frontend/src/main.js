@@ -3,7 +3,11 @@
  */
 
 import { ChartManager } from './chart.js';
-import { fetchChartData, fetchFromExchange, uploadCSV } from './api.js';
+import {
+    fetchChartData, fetchFromExchange, uploadCSV,
+    getAgentsOverview, createAgent, deleteAgent, toggleAgent, closePosition,
+    getAgentPositionsForChart,
+} from './api.js';
 
 // ── State ───────────────────────────────────────────────────
 let chart = null;
@@ -138,10 +142,22 @@ function init() {
 
     // Auto-load after short delay
     setTimeout(() => loadChart(), 500);
+
+    // ── Agent Broker init ───────────────────────────────────
+    initAgentBroker();
 }
 
 // ── Load chart data ─────────────────────────────────────────
+let isLoading = false;
+
 async function loadChart() {
+    // Prevent multiple simultaneous loads
+    if (isLoading) {
+        console.log('Load already in progress, skipping...');
+        return;
+    }
+    
+    isLoading = true;
     showLoading(true);
     setStatus(`Loading ${currentSymbol} ${currentTimeframe}...`);
 
@@ -157,19 +173,51 @@ async function loadChart() {
         chart.setData(data);
         updateInfoPanel(data);
         updateSignalsList(data.markers || []);
+        
+        // Load and display agent positions for this chart
+        try {
+            const resp = await getAgentPositionsForChart(currentSymbol, currentTimeframe);
+            chart.showAgentPositions(resp.positions || []);
+        } catch (posErr) {
+            console.warn('Could not load agent positions:', posErr);
+        }
+        
         setStatus(`${currentSymbol} ${currentTimeframe} — ${data.candles?.length || 0} bars loaded`);
     } catch (err) {
-        setStatus(`Error: ${err.message}`, true);
+        // Check if error is due to missing data
+        if (err.message.includes('No OHLCV data found') || err.message.includes('404')) {
+            const msg = `No data for ${currentSymbol} ${currentTimeframe}`;
+            setStatus(`${msg}. Click "Fetch" to load from exchange.`, true);
+            
+            // Reset loading state before showing prompt
+            showLoading(false);
+            isLoading = false;
+            
+            // Auto-prompt to fetch data
+            if (confirm(`${msg}.\n\nWould you like to fetch it from the exchange now?`)) {
+                await fetchFromExchangeAndLoad();
+            }
+            return;
+        } else {
+            setStatus(`Error: ${err.message}`, true);
+        }
         console.error('Load error:', err);
     } finally {
         showLoading(false);
+        isLoading = false;
     }
 }
 
 // ── Fetch from exchange ─────────────────────────────────────
 async function fetchFromExchangeAndLoad() {
+    if (isLoading) {
+        console.log('Already loading, skipping fetch...');
+        return;
+    }
+    
+    isLoading = true;
     showLoading(true);
-    setStatus(`Fetching ${currentSymbol} from exchange...`);
+    setStatus(`Fetching ${currentSymbol} ${currentTimeframe} from exchange...`);
 
     try {
         const result = await fetchFromExchange(
@@ -177,11 +225,15 @@ async function fetchFromExchangeAndLoad() {
         );
         setStatus(`Fetched ${result.bars_stored} bars — running analysis...`);
 
+        // Reset loading flag to allow loadChart to proceed
+        isLoading = false;
+        
         // Now load chart with analysis
         await loadChart();
     } catch (err) {
         setStatus(`Fetch error: ${err.message}`, true);
         showLoading(false);
+        isLoading = false;
     }
 }
 
@@ -243,8 +295,9 @@ function updateSignalsList(markers) {
         const arrow = isBull ? '▲' : '▼';
         const type = isBull ? 'BULLISH' : 'BEARISH';
         const date = new Date(m.time * 1000);
-        const timeStr = date.toLocaleDateString('en-US', {
+        const timeStr = date.toLocaleDateString('fr-FR', {
             month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+            timeZone: 'Europe/Paris',
         });
 
         return `
@@ -269,7 +322,9 @@ function showLoading(show) {
 function setStatus(text, isError = false) {
     statusText.textContent = text;
     statusText.style.color = isError ? '#ff4466' : '#888899';
-    statusTime.textContent = new Date().toLocaleTimeString();
+    statusTime.textContent = new Date().toLocaleTimeString('fr-FR', { 
+        timeZone: 'Europe/Paris' 
+    });
 }
 
 // ── Live Mode ───────────────────────────────────────────────
@@ -323,6 +378,234 @@ function toggleLiveMode() {
         startLiveMode();
     }
 }
+
+// ── Agent Broker ────────────────────────────────────────────
+let agentRefreshInterval = null;
+
+function initAgentBroker() {
+    const toggleCreateBtn = document.getElementById('toggleCreateAgent');
+    const createForm = document.getElementById('createAgentForm');
+    const createBtn = document.getElementById('createAgentBtn');
+    const cancelBtn = document.getElementById('cancelCreateAgent');
+    const refreshAgentsBtn = document.getElementById('refreshAgentsBtn');
+
+    toggleCreateBtn.addEventListener('click', () => {
+        const isVisible = createForm.style.display !== 'none';
+        if (isVisible) {
+            createForm.style.display = 'none';
+        } else {
+            // Copy current chart parameters to form
+            document.getElementById('agentSymbol').value = currentSymbol;
+            document.getElementById('agentTimeframe').value = currentTimeframe;
+            document.getElementById('agentSensitivity').value = currentSensitivity;
+            document.getElementById('agentSignalMode').value = currentSignalMode;
+            document.getElementById('agentLimit').value = currentLimit.toString();
+            createForm.style.display = 'block';
+        }
+    });
+
+    cancelBtn.addEventListener('click', () => {
+        createForm.style.display = 'none';
+    });
+
+    createBtn.addEventListener('click', handleCreateAgent);
+    refreshAgentsBtn.addEventListener('click', loadAgentsOverview);
+
+    // Initial load + auto-refresh every 30s
+    setTimeout(() => loadAgentsOverview(), 1000);
+    agentRefreshInterval = setInterval(loadAgentsOverview, 30000);
+}
+
+async function handleCreateAgent() {
+    const symbol = document.getElementById('agentSymbol').value;
+    const timeframe = document.getElementById('agentTimeframe').value;
+    const amount = parseFloat(document.getElementById('agentAmount').value);
+    const mode = document.getElementById('agentMode').value;
+    const sensitivity = document.getElementById('agentSensitivity').value;
+    const signal_mode = document.getElementById('agentSignalMode').value;
+    const analysis_limit = parseInt(document.getElementById('agentLimit').value);
+
+    try {
+        await createAgent({ 
+            symbol, 
+            timeframe, 
+            trade_amount: amount, 
+            mode,
+            sensitivity,
+            signal_mode,
+            analysis_limit
+        });
+        document.getElementById('createAgentForm').style.display = 'none';
+        setStatus(`Agent created: ${symbol} ${timeframe} (${mode}, ${sensitivity})`);
+        await loadAgentsOverview();
+    } catch (err) {
+        setStatus(`Error creating agent: ${err.message}`, true);
+    }
+}
+
+async function handleToggleAgent(agentId) {
+    try {
+        await toggleAgent(agentId);
+        await loadAgentsOverview();
+    } catch (err) {
+        setStatus(`Error toggling agent: ${err.message}`, true);
+    }
+}
+
+async function handleDeleteAgent(agentId, agentName) {
+    if (!confirm(`Supprimer ${agentName} ? Les positions ouvertes seront fermées.`)) return;
+    try {
+        await deleteAgent(agentId);
+        setStatus(`Agent ${agentName} supprimé`);
+        await loadAgentsOverview();
+    } catch (err) {
+        setStatus(`Error deleting agent: ${err.message}`, true);
+    }
+}
+
+async function handleClosePosition(positionId) {
+    if (!confirm('Clôturer cette position manuellement ?')) return;
+    try {
+        const result = await closePosition(positionId);
+        const pnlStr = result.pnl >= 0 ? `+${result.pnl.toFixed(4)}` : result.pnl.toFixed(4);
+        setStatus(`Position fermée — PnL: ${pnlStr} USDT`);
+        await loadAgentsOverview();
+    } catch (err) {
+        setStatus(`Error closing position: ${err.message}`, true);
+    }
+}
+
+async function loadAgentsOverview() {
+    try {
+        const data = await getAgentsOverview();
+        renderAgentsList(data.agents);
+        renderPositionsTable(data.open_positions);
+        updateAgentBadges(data);
+        
+        // Also refresh agent positions on current chart
+        if (chart) {
+            try {
+                const resp = await getAgentPositionsForChart(currentSymbol, currentTimeframe);
+                chart.showAgentPositions(resp.positions || []);
+            } catch (posErr) {
+                console.warn('Could not refresh chart positions:', posErr);
+            }
+        }
+    } catch (err) {
+        console.error('Failed to load agents:', err);
+    }
+}
+
+function updateAgentBadges(data) {
+    const activeBadge = document.getElementById('activeAgentsBadge');
+    const pnlBadge = document.getElementById('totalPnlBadge');
+
+    activeBadge.textContent = `${data.active_agents} active`;
+
+    const pnl = data.total_realized_pnl;
+    const sign = pnl >= 0 ? '+' : '';
+    pnlBadge.textContent = `PnL: ${sign}${pnl.toFixed(2)} USDT`;
+    pnlBadge.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--text-muted)';
+}
+
+function renderAgentsList(agents) {
+    const container = document.getElementById('agentsList');
+
+    if (!agents.length) {
+        container.innerHTML = '<div class="empty-state" style="padding:10px;">Aucun agent — cliquez "+ Agent" pour créer</div>';
+        return;
+    }
+
+    const html = agents.map(agent => {
+        const statusClass = agent.is_active ? 'active' : '';
+        const cardClass = agent.is_active ? '' : 'inactive';
+        const modeClass = agent.mode === 'paper' ? 'paper' : 'live';
+        const modeLabel = agent.mode === 'paper' ? '📄 PAPER' : '🔴 LIVE';
+        const toggleLabel = agent.is_active ? '⏸' : '▶';
+        const toggleTitle = agent.is_active ? 'Désactiver' : 'Activer';
+
+        const pnl = agent.total_pnl || 0;
+        const pnlClass = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : 'neutral';
+        const pnlSign = pnl >= 0 ? '+' : '';
+
+        return `
+            <div class="agent-card ${cardClass}">
+                <span class="agent-status-dot ${statusClass}"></span>
+                <span class="agent-name">${agent.name}</span>
+                <span class="agent-info">${agent.symbol} ${agent.timeframe}</span>
+                <span class="agent-mode-badge ${modeClass}">${modeLabel}</span>
+                <span class="agent-info">${agent.trade_amount}€</span>
+                <span class="agent-pnl ${pnlClass}">${pnlSign}${pnl.toFixed(2)}</span>
+                <span class="agent-info">(${agent.open_positions} pos)</span>
+                <div class="agent-actions">
+                    <button onclick="window._handleToggleAgent(${agent.id})" title="${toggleTitle}">${toggleLabel}</button>
+                    <button class="btn-delete" onclick="window._handleDeleteAgent(${agent.id}, '${agent.name}')" title="Supprimer">✕</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    container.innerHTML = html;
+}
+
+function renderPositionsTable(positions) {
+    const tbody = document.getElementById('positionsBody');
+
+    if (!positions.length) {
+        tbody.innerHTML = '<tr class="empty-row"><td colspan="11">Aucune position ouverte</td></tr>';
+        return;
+    }
+
+    const html = positions.map(pos => {
+        const sideClass = pos.side === 'LONG' ? 'side-long' : 'side-short';
+        const sideIcon = pos.side === 'LONG' ? '▲' : '▼';
+
+        // Calculate duration
+        const opened = new Date(pos.opened_at);
+        const now = new Date();
+        const diffMs = now - opened;
+        const hours = Math.floor(diffMs / 3600000);
+        const minutes = Math.floor((diffMs % 3600000) / 60000);
+        const duration = hours > 0 ? `${hours}h${minutes.toString().padStart(2, '0')}m` : `${minutes}m`;
+
+        // Format opened date and time (Paris timezone)
+        const openedDate = opened.toLocaleDateString('fr-FR', { 
+            day: '2-digit', 
+            month: '2-digit', 
+            year: 'numeric',
+            timeZone: 'Europe/Paris',
+        });
+        const openedTime = opened.toLocaleTimeString('fr-FR', { 
+            hour: '2-digit', 
+            minute: '2-digit',
+            timeZone: 'Europe/Paris',
+        });
+        const openedDateTime = `${openedDate}<br/>${openedTime}`;
+
+        return `
+            <tr>
+                <td>${pos.agent_name}</td>
+                <td class="${sideClass}">${sideIcon} ${pos.side}</td>
+                <td>${pos.symbol}</td>
+                <td>${pos.entry_price.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}</td>
+                <td style="color:var(--red)">${pos.stop_loss.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}</td>
+                <td style="color:var(--green)">${pos.take_profit ? pos.take_profit.toLocaleString('fr-FR', { minimumFractionDigits: 2 }) : '—'}</td>
+                <td>${pos.quantity.toFixed(6)}</td>
+                <td>—</td>
+                <td>${openedDateTime}</td>
+                <td>${duration}</td>
+                <td><button class="btn-close-position" onclick="window._handleClosePosition(${pos.id})">Clôturer</button></td>
+            </tr>
+        `;
+    }).join('');
+
+    tbody.innerHTML = html;
+}
+
+// Expose handlers to window for inline onclick
+window._handleToggleAgent = handleToggleAgent;
+window._handleDeleteAgent = handleDeleteAgent;
+window._handleClosePosition = handleClosePosition;
 
 // ── Boot ────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', init);

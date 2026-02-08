@@ -3,8 +3,9 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, String, Float, Boolean, Integer, DateTime, Text,
-    PrimaryKeyConstraint, Index,
+    PrimaryKeyConstraint, Index, ForeignKey, JSON,
 )
+from sqlalchemy.orm import relationship
 from .database import Base
 
 
@@ -104,3 +105,59 @@ class Watchlist(Base):
     __table_args__ = (
         PrimaryKeyConstraint("symbol", "timeframe"),
     )
+
+
+class Agent(Base):
+    __tablename__ = "agents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(50), unique=True, nullable=False)
+    symbol = Column(String(20), nullable=False)
+    timeframe = Column(String(10), nullable=False)
+    trade_amount = Column(Float, nullable=False, default=100.0)
+    is_active = Column(Boolean, nullable=False, default=False)
+    mode = Column(String(10), nullable=False, default="paper")  # 'paper' or 'live'
+    # Analysis parameters
+    sensitivity = Column(String(20), nullable=False, default="Medium")
+    signal_mode = Column(String(30), nullable=False, default="Confirmed Only")
+    analysis_limit = Column(Integer, nullable=False, default=500)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    positions = relationship("AgentPosition", back_populates="agent", cascade="all, delete-orphan")
+    logs = relationship("AgentLog", back_populates="agent", cascade="all, delete-orphan")
+
+
+class AgentPosition(Base):
+    __tablename__ = "agent_positions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    symbol = Column(String(20), nullable=False)
+    side = Column(String(5), nullable=False)  # LONG or SHORT
+    entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float)
+    stop_loss = Column(Float, nullable=False)
+    take_profit = Column(Float)
+    quantity = Column(Float, nullable=False)
+    status = Column(String(10), nullable=False, default="OPEN")  # OPEN, CLOSED, STOPPED
+    entry_signal_id = Column(Integer)
+    exit_signal_id = Column(Integer)
+    pnl = Column(Float)
+    pnl_percent = Column(Float)
+    opened_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    closed_at = Column(DateTime(timezone=True))
+
+    agent = relationship("Agent", back_populates="positions")
+
+
+class AgentLog(Base):
+    __tablename__ = "agent_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    action = Column(String(50), nullable=False)
+    details = Column(JSON)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    agent = relationship("Agent", back_populates="logs")

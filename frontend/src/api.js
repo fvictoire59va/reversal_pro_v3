@@ -9,12 +9,15 @@ export async function fetchChartData(symbol, timeframe, limit, sensitivity, sign
         limit: String(limit),
         sensitivity: sensitivity,
         signal_mode: signalMode,
+        _t: Date.now(), // Cache-busting parameter
     });
 
     // Replace / with - for URL compatibility
     const urlSymbol = symbol.replace('/', '-');
     const url = `${API_BASE}/analysis/chart/${urlSymbol}/${timeframe}?${params}`;
-    const res = await fetch(url);
+    const res = await fetch(url, {
+        cache: 'no-store', // Disable browser cache
+    });
 
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -71,5 +74,75 @@ export async function addToWatchlist(item) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(item),
     });
+    return res.json();
+}
+
+// ── Agent Broker API ────────────────────────────────────────
+
+export async function getAgentsOverview() {
+    const res = await fetch(`${API_BASE}/agents/`);
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `API error ${res.status}`);
+    }
+    return res.json();
+}
+
+export async function createAgent(data) {
+    const res = await fetch(`${API_BASE}/agents/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Create error ${res.status}`);
+    }
+    return res.json();
+}
+
+export async function deleteAgent(agentId) {
+    const res = await fetch(`${API_BASE}/agents/${agentId}`, {
+        method: 'DELETE',
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Delete error ${res.status}`);
+    }
+    return res.json();
+}
+
+export async function toggleAgent(agentId) {
+    const res = await fetch(`${API_BASE}/agents/${agentId}/toggle`, {
+        method: 'PATCH',
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Toggle error ${res.status}`);
+    }
+    return res.json();
+}
+
+export async function closePosition(positionId) {
+    const res = await fetch(`${API_BASE}/agents/positions/${positionId}/close`, {
+        method: 'POST',
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Close error ${res.status}`);
+    }
+    return res.json();
+}
+
+export async function getAgentLogs(agentId, limit = 50) {
+    const res = await fetch(`${API_BASE}/agents/${agentId}/logs?limit=${limit}`);
+    if (!res.ok) return [];
+    return res.json();
+}
+
+export async function getAgentPositionsForChart(symbol, timeframe) {
+    const urlSymbol = symbol.replace('/', '-');
+    const res = await fetch(`${API_BASE}/agents/positions-by-chart/${urlSymbol}/${timeframe}`);
+    if (!res.ok) return { positions: [] };
     return res.json();
 }

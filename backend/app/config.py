@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     # Scheduler
     auto_refresh_enabled: bool = True
     auto_refresh_interval_minutes: int = 5
+    agent_cycle_interval_minutes: int = 5
+
+    # Hyperliquid (API keys via .env)
+    hyperliquid_wallet_address: str = ""
+    hyperliquid_api_secret: str = ""
+
+    # Telegram Bot
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_enabled: bool = False
 
     class Config:
         env_file = ".env"

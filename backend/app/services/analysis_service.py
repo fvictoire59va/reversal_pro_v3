@@ -42,10 +42,11 @@ class AnalysisService:
         limit: int = 500,
     ) -> List[dict]:
         """Load OHLCV bars from TimescaleDB."""
-        cache_key = f"ohlcv:{symbol}:{timeframe}:{limit}"
-        cached = await cache_get(cache_key)
-        if cached:
-            return cached
+        # Cache disabled for real-time updates
+        # cache_key = f"ohlcv:{symbol}:{timeframe}:{limit}"
+        # cached = await cache_get(cache_key)
+        # if cached:
+        #     return cached
 
         query = text("""
             SELECT time, open, high, low, close, volume
@@ -79,7 +80,9 @@ class AnalysisService:
         ]
 
         if bars:
-            await cache_set(cache_key, bars, ttl=60)
+            # Cache disabled for real-time updates
+            # await cache_set(cache_key, bars, ttl=60)
+            pass
 
         return bars
 
@@ -222,10 +225,11 @@ class AnalysisService:
     ) -> ChartDataResponse:
         """Get data formatted for TradingView lightweight-charts."""
 
-        cache_key = f"chart:{symbol}:{timeframe}:{limit}:{sensitivity}"
-        cached = await cache_get(cache_key)
-        if cached:
-            return ChartDataResponse(**cached)
+        # Cache disabled for real-time updates
+        # cache_key = f"chart:{symbol}:{timeframe}:{limit}:{sensitivity}"
+        # cached = await cache_get(cache_key)
+        # if cached:
+        #     return ChartDataResponse(**cached)
 
         # Run full analysis
         request = AnalysisRequest(
@@ -291,8 +295,8 @@ class AnalysisService:
             atr_multiplier=analysis.atr_multiplier,
         )
 
-        # Cache result
-        await cache_set(cache_key, chart_data.model_dump(), ttl=120)
+        # Cache disabled for real-time updates
+        # await cache_set(cache_key, chart_data.model_dump(), ttl=120)
 
         return chart_data
 

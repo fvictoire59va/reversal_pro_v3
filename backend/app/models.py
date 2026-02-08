@@ -115,6 +115,7 @@ class Agent(Base):
     symbol = Column(String(20), nullable=False)
     timeframe = Column(String(10), nullable=False)
     trade_amount = Column(Float, nullable=False, default=100.0)
+    balance = Column(Float, nullable=False, default=100.0)  # Current available balance
     is_active = Column(Boolean, nullable=False, default=False)
     mode = Column(String(10), nullable=False, default="paper")  # 'paper' or 'live'
     # Analysis parameters
@@ -145,6 +146,10 @@ class AgentPosition(Base):
     exit_signal_id = Column(Integer)
     pnl = Column(Float)
     pnl_percent = Column(Float)
+    unrealized_pnl = Column(Float)
+    unrealized_pnl_percent = Column(Float)
+    current_price = Column(Float)
+    pnl_updated_at = Column(DateTime(timezone=True))
     opened_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     closed_at = Column(DateTime(timezone=True))
 

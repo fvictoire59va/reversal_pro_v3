@@ -28,8 +28,10 @@ export class ChartManager {
         this.volumeSeries = null;
         this.zonePriceLines = [];
         this.agentPositionLines = []; // Store agent position lines
+        this.agentZoneSeries = [];    // TP/SL colored zone series
         this.signalMarkers = [];      // Reversal signal markers (from analysis)
         this.agentMarkers = [];       // Agent position entry markers
+        this.lastCandleTime = null;   // Last candle time (Paris-shifted)
         
         // Position Tool state
         this.positionTool = {
@@ -151,7 +153,9 @@ export class ChartManager {
 
         // Candles
         if (data.candles?.length) {
-            this.candleSeries.setData(data.candles.map(shiftTime));
+            const shiftedCandles = data.candles.map(shiftTime);
+            this.candleSeries.setData(shiftedCandles);
+            this.lastCandleTime = shiftedCandles[shiftedCandles.length - 1].time;
         }
 
         // Volume (derive from candles — API could add volumes later)
@@ -400,6 +404,13 @@ export class ChartManager {
             this.candleSeries.removePriceLine(line);
         });
         this.agentPositionLines = [];
+
+        // Clear existing zone series
+        this.agentZoneSeries.forEach(series => {
+            this.chart.removeSeries(series);
+        });
+        this.agentZoneSeries = [];
+
         this.agentMarkers = [];
 
         if (!positions || positions.length === 0) {
@@ -466,6 +477,53 @@ export class ChartManager {
                     size: 1,
                 };
                 this.agentMarkers.push(entryMarker);
+
+                // Draw TP/SL colored zones
+                if (this.lastCandleTime && pos.take_profit && pos.stop_loss) {
+                    const zoneStart = entryMarker.time;
+                    const zoneEnd = this.lastCandleTime;
+                    const zoneData = [{ time: zoneStart, value: pos.entry_price }];
+                    // Add intermediate points every ~50 candles for smooth rendering
+                    const step = Math.max(60, Math.floor((zoneEnd - zoneStart) / 50));
+                    for (let t = zoneStart + step; t < zoneEnd; t += step) {
+                        zoneData.push({ time: t, value: pos.entry_price });
+                    }
+                    zoneData.push({ time: zoneEnd, value: pos.entry_price });
+
+                    // TP zone (green) — baseline series with fill between entry and TP
+                    const tpZone = this.chart.addBaselineSeries({
+                        baseValue: { type: 'price', price: isLong ? pos.take_profit : pos.stop_loss },
+                        topLineColor: 'transparent',
+                        bottomLineColor: 'transparent',
+                        topFillColor1: 'transparent',
+                        topFillColor2: 'transparent',
+                        bottomFillColor1: isLong ? 'rgba(0, 170, 85, 0.12)' : 'rgba(221, 51, 68, 0.12)',
+                        bottomFillColor2: isLong ? 'rgba(0, 170, 85, 0.06)' : 'rgba(221, 51, 68, 0.06)',
+                        lineWidth: 0,
+                        priceLineVisible: false,
+                        lastValueVisible: false,
+                        crosshairMarkerVisible: false,
+                    });
+                    tpZone.setData(zoneData);
+                    this.agentZoneSeries.push(tpZone);
+
+                    // SL zone (red) — baseline series with fill between entry and SL
+                    const slZone = this.chart.addBaselineSeries({
+                        baseValue: { type: 'price', price: isLong ? pos.stop_loss : pos.take_profit },
+                        topLineColor: 'transparent',
+                        bottomLineColor: 'transparent',
+                        topFillColor1: isLong ? 'rgba(221, 51, 68, 0.06)' : 'rgba(0, 170, 85, 0.06)',
+                        topFillColor2: isLong ? 'rgba(221, 51, 68, 0.12)' : 'rgba(0, 170, 85, 0.12)',
+                        bottomFillColor1: 'transparent',
+                        bottomFillColor2: 'transparent',
+                        lineWidth: 0,
+                        priceLineVisible: false,
+                        lastValueVisible: false,
+                        crosshairMarkerVisible: false,
+                    });
+                    slZone.setData(zoneData);
+                    this.agentZoneSeries.push(slZone);
+                }
             }
 
             // For closed positions, show exit line

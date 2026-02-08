@@ -165,6 +165,7 @@ class AgentResponse(BaseModel):
     symbol: str
     timeframe: str
     trade_amount: float
+    balance: float
     is_active: bool
     mode: str
     sensitivity: str = "Medium"
@@ -174,6 +175,7 @@ class AgentResponse(BaseModel):
     updated_at: datetime
     open_positions: int = 0
     total_pnl: float = 0.0
+    total_unrealized_pnl: float = 0.0
 
     class Config:
         from_attributes = True
@@ -193,6 +195,10 @@ class PositionResponse(BaseModel):
     status: str
     pnl: Optional[float] = None
     pnl_percent: Optional[float] = None
+    unrealized_pnl: Optional[float] = None
+    unrealized_pnl_percent: Optional[float] = None
+    current_price: Optional[float] = None
+    pnl_updated_at: Optional[datetime] = None
     opened_at: datetime
     closed_at: Optional[datetime] = None
 

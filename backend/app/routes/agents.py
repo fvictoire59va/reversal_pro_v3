@@ -38,6 +38,7 @@ async def get_agents_overview(db: AsyncSession = Depends(get_db)):
             symbol=agent.symbol,
             timeframe=agent.timeframe,
             trade_amount=agent.trade_amount,
+            balance=agent.balance,
             is_active=agent.is_active,
             mode=agent.mode,
             sensitivity=agent.sensitivity,
@@ -47,6 +48,7 @@ async def get_agents_overview(db: AsyncSession = Depends(get_db)):
             updated_at=agent.updated_at,
             open_positions=stats["open_positions"],
             total_pnl=stats["total_pnl"],
+            total_unrealized_pnl=stats["total_unrealized_pnl"],
         ))
 
     # Build position responses with agent names
@@ -66,6 +68,10 @@ async def get_agents_overview(db: AsyncSession = Depends(get_db)):
             status=p.status,
             pnl=p.pnl,
             pnl_percent=p.pnl_percent,
+            unrealized_pnl=p.unrealized_pnl,
+            unrealized_pnl_percent=p.unrealized_pnl_percent,
+            current_price=p.current_price,
+            pnl_updated_at=p.pnl_updated_at,
             opened_at=p.opened_at,
             closed_at=p.closed_at,
         )
@@ -99,6 +105,7 @@ async def create_agent(req: AgentCreate, db: AsyncSession = Depends(get_db)):
             symbol=agent.symbol,
             timeframe=agent.timeframe,
             trade_amount=agent.trade_amount,
+            balance=agent.balance,
             is_active=agent.is_active,
             mode=agent.mode,
             sensitivity=agent.sensitivity,
@@ -108,6 +115,7 @@ async def create_agent(req: AgentCreate, db: AsyncSession = Depends(get_db)):
             updated_at=agent.updated_at,
             open_positions=stats["open_positions"],
             total_pnl=stats["total_pnl"],
+            total_unrealized_pnl=stats["total_unrealized_pnl"],
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -136,12 +144,14 @@ async def toggle_agent(agent_id: int, db: AsyncSession = Depends(get_db)):
         symbol=agent.symbol,
         timeframe=agent.timeframe,
         trade_amount=agent.trade_amount,
+        balance=agent.balance,
         is_active=agent.is_active,
         mode=agent.mode,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
         open_positions=stats["open_positions"],
         total_pnl=stats["total_pnl"],
+        total_unrealized_pnl=stats["total_unrealized_pnl"],
     )
 
 
@@ -167,12 +177,14 @@ async def update_agent(agent_id: int, req: AgentUpdate, db: AsyncSession = Depen
         symbol=agent.symbol,
         timeframe=agent.timeframe,
         trade_amount=agent.trade_amount,
+        balance=agent.balance,
         is_active=agent.is_active,
         mode=agent.mode,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
         open_positions=stats["open_positions"],
         total_pnl=stats["total_pnl"],
+        total_unrealized_pnl=stats["total_unrealized_pnl"],
     )
 
 

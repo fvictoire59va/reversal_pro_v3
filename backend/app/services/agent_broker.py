@@ -54,6 +54,7 @@ class AgentBrokerService:
             symbol=symbol,
             timeframe=timeframe,
             trade_amount=trade_amount,
+            balance=trade_amount,
             is_active=False,
             mode=mode,
             sensitivity=sensitivity,
@@ -237,6 +238,8 @@ class AgentBrokerService:
             for pos in open_positions:
                 if await self._check_stop_loss(db, agent, pos, current_price):
                     continue  # Position was stopped out
+                # Update unrealized PnL for surviving open positions
+                await self._update_unrealized_pnl(db, pos, current_price)
 
             # Refresh open positions after SL checks
             open_positions = await self._get_open_positions(db, agent.id)
@@ -246,6 +249,47 @@ class AgentBrokerService:
             is_bullish = latest_signal[1]
             signal_price = latest_signal[2]
             signal_id = latest_signal[3]
+            signal_bar_index = latest_signal[4]
+
+            # 5a. Check signal freshness using bar_index position in the
+            # analysis window. Confirmed signals have their time set to the
+            # PIVOT bar (the reversal extreme), which is naturally many bars
+            # before the confirmation bar. Instead of time-based staleness,
+            # we check how far the signal is from the end of the analysis.
+            analysis_run_result = await db.execute(text("""
+                SELECT bars_analyzed FROM analysis_runs
+                WHERE symbol = :symbol AND timeframe = :timeframe
+                ORDER BY created_at DESC LIMIT 1
+            """), {"symbol": agent.symbol, "timeframe": agent.timeframe})
+            analysis_run_row = analysis_run_result.fetchone()
+
+            if analysis_run_row and signal_bar_index is not None:
+                bars_analyzed = analysis_run_row[0]
+                bars_from_end = bars_analyzed - signal_bar_index
+                # Adaptive threshold based on timeframe.
+                # Confirmed signals appear at the PIVOT bar, typically 3-10
+                # bars from the end when first detected. The threshold defines
+                # how many minutes/candles we tolerate before considering
+                # the signal stale.  Typical signal-to-signal gap on 1m ≈12 bars.
+                tf_minutes = self._timeframe_to_minutes(agent.timeframe)
+                if tf_minutes <= 1:
+                    max_bars_back = 15   # 15 min window for 1m
+                elif tf_minutes <= 5:
+                    max_bars_back = 20   # ~1h40 for 5m
+                elif tf_minutes <= 15:
+                    max_bars_back = 15   # ~3h45 for 15m
+                else:
+                    max_bars_back = 10   # ~10h for 1h
+                if bars_from_end > max_bars_back:
+                    logger.info(
+                        f"[{agent.name}] Signal {signal_id} is stale "
+                        f"(bar {signal_bar_index}/{bars_analyzed}, {bars_from_end} bars from end, max {max_bars_back}), skipping"
+                    )
+                    return
+                logger.debug(
+                    f"[{agent.name}] Signal {signal_id} freshness OK "
+                    f"(bar {signal_bar_index}/{bars_analyzed}, {bars_from_end} bars from end)"
+                )
 
             # Check if already processed this signal
             already_processed = await self._is_signal_processed(db, agent.id, signal_id)
@@ -253,39 +297,56 @@ class AgentBrokerService:
                 logger.debug(f"[{agent.name}] Signal {signal_id} already processed")
                 return
 
-            has_long = any(p.side == "LONG" for p in open_positions)
-            has_short = any(p.side == "SHORT" for p in open_positions)
+            # Agent uses ALL capital in one position at a time.
+            # If a position is already open, only close it on inverse signal.
+            has_position = len(open_positions) > 0
 
             if is_bullish:
-                # Bullish reversal: close SHORT, open LONG
-                if has_short:
-                    short_pos = next(p for p in open_positions if p.side == "SHORT")
-                    await self._close_position_internal(
-                        db, short_pos, exit_price=current_price,
-                        exit_signal_id=signal_id, reason="BULLISH_REVERSAL"
-                    )
-                    logger.info(f"[{agent.name}] Closed SHORT on bullish reversal")
+                # Bullish reversal: close SHORT if any, then open LONG
+                if has_position:
+                    short_pos = next((p for p in open_positions if p.side == "SHORT"), None)
+                    if short_pos:
+                        await self._close_position_internal(
+                            db, short_pos, exit_price=current_price,
+                            exit_signal_id=signal_id, reason="BULLISH_REVERSAL"
+                        )
+                        logger.info(f"[{agent.name}] Closed SHORT on bullish reversal")
+                    else:
+                        # Already have a LONG open — do nothing
+                        logger.debug(f"[{agent.name}] Already in LONG position, skipping")
+                        return
 
-                if not has_long:
-                    await self._open_position(
-                        db, agent, "LONG", current_price, signal_id
-                    )
-                    logger.info(f"[{agent.name}] Opened LONG on bullish reversal")
+                # Open LONG with available balance
+                if agent.balance <= 0:
+                    logger.info(f"[{agent.name}] Balance is {agent.balance:.2f}, cannot open position")
+                    return
+                await self._open_position(
+                    db, agent, "LONG", current_price, signal_id
+                )
+                logger.info(f"[{agent.name}] Opened LONG with {agent.balance:.2f}€ on bullish reversal")
             else:
-                # Bearish reversal: close LONG, open SHORT
-                if has_long:
-                    long_pos = next(p for p in open_positions if p.side == "LONG")
-                    await self._close_position_internal(
-                        db, long_pos, exit_price=current_price,
-                        exit_signal_id=signal_id, reason="BEARISH_REVERSAL"
-                    )
-                    logger.info(f"[{agent.name}] Closed LONG on bearish reversal")
+                # Bearish reversal: close LONG if any, then open SHORT
+                if has_position:
+                    long_pos = next((p for p in open_positions if p.side == "LONG"), None)
+                    if long_pos:
+                        await self._close_position_internal(
+                            db, long_pos, exit_price=current_price,
+                            exit_signal_id=signal_id, reason="BEARISH_REVERSAL"
+                        )
+                        logger.info(f"[{agent.name}] Closed LONG on bearish reversal")
+                    else:
+                        # Already have a SHORT open — do nothing
+                        logger.debug(f"[{agent.name}] Already in SHORT position, skipping")
+                        return
 
-                if not has_short:
-                    await self._open_position(
-                        db, agent, "SHORT", current_price, signal_id
-                    )
-                    logger.info(f"[{agent.name}] Opened SHORT on bearish reversal")
+                # Open SHORT with available balance
+                if agent.balance <= 0:
+                    logger.info(f"[{agent.name}] Balance is {agent.balance:.2f}, cannot open position")
+                    return
+                await self._open_position(
+                    db, agent, "SHORT", current_price, signal_id
+                )
+                logger.info(f"[{agent.name}] Opened SHORT with {agent.balance:.2f}€ on bearish reversal")
 
         except Exception as e:
             logger.error(f"[{agent.name}] Cycle error: {e}", exc_info=True)
@@ -312,7 +373,7 @@ class AgentBrokerService:
                                  timeframe: str) -> Optional[tuple]:
         """Get the most recent confirmed signal."""
         result = await db.execute(text("""
-            SELECT time, is_bullish, price, id
+            SELECT time, is_bullish, price, id, bar_index
             FROM signals
             WHERE symbol = :symbol AND timeframe = :timeframe
               AND is_preview = FALSE
@@ -400,10 +461,16 @@ class AgentBrokerService:
 
         return round(sl, 2), round(tp, 2)
 
+    async def _get_available_capital(self, db: AsyncSession, agent: Agent) -> float:
+        """Return agent's current balance."""
+        return agent.balance
+
     async def _open_position(self, db: AsyncSession, agent: Agent,
-                             side: str, current_price: float, signal_id: int):
-        """Open a new position."""
+                             side: str, current_price: float, signal_id: int,
+                             amount: Optional[float] = None):
+        """Open a new position using agent's full balance."""
         settings = get_settings()
+        trade_amount = agent.balance
 
         # Get previous pivot for SL calculation
         now = datetime.now(timezone.utc)
@@ -419,7 +486,7 @@ class AgentBrokerService:
         order_result = await hyperliquid_client.market_open(
             symbol=agent.symbol,
             side=side,
-            eur_amount=agent.trade_amount,
+            eur_amount=trade_amount,
             current_price=current_price,
             mode=agent.mode,
             wallet_address=settings.hyperliquid_wallet_address,
@@ -440,11 +507,14 @@ class AgentBrokerService:
             entry_price=order_result.filled_price or current_price,
             stop_loss=sl,
             take_profit=tp,
-            quantity=order_result.quantity or (agent.trade_amount / current_price),
+            quantity=order_result.quantity or (trade_amount / current_price),
             status="OPEN",
             entry_signal_id=signal_id,
         )
         db.add(position)
+
+        # Set balance to 0 — all capital is engaged in the position
+        agent.balance = 0
         await db.commit()
         await db.refresh(position)
 
@@ -513,6 +583,13 @@ class AgentBrokerService:
         pos.exit_signal_id = exit_signal_id
         pos.closed_at = datetime.now(timezone.utc)
 
+        # Restore balance to agent: engaged amount + PnL
+        # The engaged amount was agent.trade_amount at position open time,
+        # we recalculate from entry_price * quantity (actual engaged value)
+        engaged_value = pos.entry_price * pos.quantity
+        if agent:
+            agent.balance = round(engaged_value + pnl, 2)
+
         await db.commit()
         await db.refresh(pos)
 
@@ -555,6 +632,22 @@ class AgentBrokerService:
             return True
 
         return False
+
+    async def _update_unrealized_pnl(self, db: AsyncSession, pos: AgentPosition,
+                                     current_price: float):
+        """Update unrealized PnL on an open position."""
+        if pos.side == "LONG":
+            pnl = (current_price - pos.entry_price) * pos.quantity
+            pnl_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
+        else:  # SHORT
+            pnl = (pos.entry_price - current_price) * pos.quantity
+            pnl_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100
+
+        pos.unrealized_pnl = round(pnl, 4)
+        pos.unrealized_pnl_percent = round(pnl_pct, 2)
+        pos.current_price = current_price
+        pos.pnl_updated_at = datetime.now(timezone.utc)
+        await db.commit()
 
     async def _is_signal_processed(self, db: AsyncSession, agent_id: int,
                                    signal_id: int) -> bool:
@@ -602,6 +695,21 @@ class AgentBrokerService:
         db.add(log)
         await db.commit()
 
+    # ── Timeframe helpers ──────────────────────────────────────
+    @staticmethod
+    def _timeframe_to_minutes(timeframe: str) -> int:
+        """Convert timeframe string (e.g. '1m', '5m', '1h', '4h', '1d') to minutes."""
+        tf = timeframe.strip().lower()
+        if tf.endswith('m'):
+            return int(tf[:-1])
+        elif tf.endswith('h'):
+            return int(tf[:-1]) * 60
+        elif tf.endswith('d'):
+            return int(tf[:-1]) * 1440
+        elif tf.endswith('w'):
+            return int(tf[:-1]) * 10080
+        return 60  # default 1h
+
     # ── Statistics ───────────────────────────────────────────
     async def get_agent_stats(self, db: AsyncSession, agent_id: int) -> dict:
         """Get statistics for an agent."""
@@ -619,9 +727,17 @@ class AgentBrokerService:
         """), {"id": agent_id})
         total_pnl = pnl_result.scalar()
 
+        # Total unrealized PnL (open positions)
+        unrealized_result = await db.execute(text("""
+            SELECT COALESCE(SUM(unrealized_pnl), 0) FROM agent_positions
+            WHERE agent_id = :id AND status = 'OPEN'
+        """), {"id": agent_id})
+        total_unrealized_pnl = unrealized_result.scalar()
+
         return {
             "open_positions": open_count,
             "total_pnl": round(total_pnl, 4),
+            "total_unrealized_pnl": round(total_unrealized_pnl, 4),
         }
 
     async def get_total_realized_pnl(self, db: AsyncSession) -> float:

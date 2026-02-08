@@ -131,6 +131,7 @@ CREATE TABLE IF NOT EXISTS agents (
     symbol          VARCHAR(20) NOT NULL,
     timeframe       VARCHAR(10) NOT NULL,
     trade_amount    DOUBLE PRECISION NOT NULL DEFAULT 100.0,
+    balance         DOUBLE PRECISION NOT NULL DEFAULT 100.0,
     is_active       BOOLEAN NOT NULL DEFAULT FALSE,
     mode            VARCHAR(10) NOT NULL DEFAULT 'paper',  -- 'paper' or 'live'
     sensitivity     VARCHAR(20) NOT NULL DEFAULT 'Medium',

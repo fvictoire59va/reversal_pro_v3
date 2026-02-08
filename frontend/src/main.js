@@ -295,8 +295,13 @@ function updateSignalsList(markers) {
         const arrow = isBull ? '▲' : '▼';
         const type = isBull ? 'BULLISH' : 'BEARISH';
         const date = new Date(m.time * 1000);
-        const timeStr = date.toLocaleDateString('fr-FR', {
-            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+        const timeStr = date.toLocaleString('fr-FR', {
+            day: '2-digit', 
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit', 
+            minute: '2-digit',
+            second: '2-digit',
             timeZone: 'Europe/Paris',
         });
 
@@ -504,7 +509,11 @@ function updateAgentBadges(data) {
 
     const pnl = data.total_realized_pnl;
     const sign = pnl >= 0 ? '+' : '';
-    pnlBadge.textContent = `PnL: ${sign}${pnl.toFixed(2)} USDT`;
+    // Sum unrealized PnL from all agents
+    const totalUnrealized = data.agents.reduce((sum, a) => sum + (a.total_unrealized_pnl || 0), 0);
+    const uSign = totalUnrealized >= 0 ? '+' : '';
+    const uPnlText = data.total_open_positions > 0 ? ` | Potentiel: ${uSign}${totalUnrealized.toFixed(2)}` : '';
+    pnlBadge.textContent = `PnL: ${sign}${pnl.toFixed(2)}${uPnlText} USDT`;
     pnlBadge.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--text-muted)';
 }
 
@@ -528,6 +537,11 @@ function renderAgentsList(agents) {
         const pnlClass = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : 'neutral';
         const pnlSign = pnl >= 0 ? '+' : '';
 
+        const uPnl = agent.total_unrealized_pnl || 0;
+        const uPnlClass = uPnl > 0 ? 'positive' : uPnl < 0 ? 'negative' : 'neutral';
+        const uPnlSign = uPnl >= 0 ? '+' : '';
+        const uPnlHtml = agent.open_positions > 0 ? `<span class="agent-pnl ${uPnlClass}" title="PnL potentiel">(${uPnlSign}${uPnl.toFixed(2)})</span>` : '';
+
         return `
             <div class="agent-card ${cardClass}">
                 <span class="agent-status-dot ${statusClass}"></span>
@@ -535,7 +549,9 @@ function renderAgentsList(agents) {
                 <span class="agent-info">${agent.symbol} ${agent.timeframe}</span>
                 <span class="agent-mode-badge ${modeClass}">${modeLabel}</span>
                 <span class="agent-info">${agent.trade_amount}€</span>
+                <span class="agent-info">Solde: ${(agent.balance || 0).toFixed(2)}€</span>
                 <span class="agent-pnl ${pnlClass}">${pnlSign}${pnl.toFixed(2)}</span>
+                ${uPnlHtml}
                 <span class="agent-info">(${agent.open_positions} pos)</span>
                 <div class="agent-actions">
                     <button onclick="window._handleToggleAgent(${agent.id})" title="${toggleTitle}">${toggleLabel}</button>
@@ -552,7 +568,7 @@ function renderPositionsTable(positions) {
     const tbody = document.getElementById('positionsBody');
 
     if (!positions.length) {
-        tbody.innerHTML = '<tr class="empty-row"><td colspan="11">Aucune position ouverte</td></tr>';
+        tbody.innerHTML = '<tr class="empty-row"><td colspan="12">Aucune position ouverte</td></tr>';
         return;
     }
 
@@ -582,16 +598,33 @@ function renderPositionsTable(positions) {
         });
         const openedDateTime = `${openedDate}<br/>${openedTime}`;
 
+        // Unrealized PnL
+        const uPnl = pos.unrealized_pnl;
+        const uPnlPct = pos.unrealized_pnl_percent;
+        let pnlCell = '—';
+        let pnlCellClass = '';
+        if (uPnl !== null && uPnl !== undefined) {
+            const uSign = uPnl >= 0 ? '+' : '';
+            pnlCellClass = uPnl > 0 ? 'pnl-positive' : uPnl < 0 ? 'pnl-negative' : '';
+            pnlCell = `${uSign}${uPnl.toFixed(4)}<br/><small>${uSign}${(uPnlPct || 0).toFixed(2)}%</small>`;
+        }
+
+        // Current price
+        const curPrice = pos.current_price
+            ? pos.current_price.toLocaleString('fr-FR', { minimumFractionDigits: 2 })
+            : '—';
+
         return `
             <tr>
                 <td>${pos.agent_name}</td>
                 <td class="${sideClass}">${sideIcon} ${pos.side}</td>
                 <td>${pos.symbol}</td>
                 <td>${pos.entry_price.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}</td>
+                <td>${curPrice}</td>
                 <td style="color:var(--red)">${pos.stop_loss.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}</td>
                 <td style="color:var(--green)">${pos.take_profit ? pos.take_profit.toLocaleString('fr-FR', { minimumFractionDigits: 2 }) : '—'}</td>
                 <td>${pos.quantity.toFixed(6)}</td>
-                <td>—</td>
+                <td class="${pnlCellClass}">${pnlCell}</td>
                 <td>${openedDateTime}</td>
                 <td>${duration}</td>
                 <td><button class="btn-close-position" onclick="window._handleClosePosition(${pos.id})">Clôturer</button></td>

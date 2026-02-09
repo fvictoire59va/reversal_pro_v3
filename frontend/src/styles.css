@@ -440,6 +440,46 @@ body {
 .dot-ema14 { background: #00BFFF; }
 .dot-ema21 { background: #FF69B4; }
 
+/* ── Signal Tooltip ────────────────────────────────────────── */
+.signal-tooltip {
+    position: absolute;
+    z-index: 100;
+    background: var(--bg-secondary, #1a1f2e);
+    border: 1px solid var(--border, #2d3548);
+    border-radius: 8px;
+    padding: 10px 14px;
+    pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    font-size: 11px;
+    min-width: 200px;
+    backdrop-filter: blur(8px);
+}
+
+.signal-tooltip-header {
+    font-weight: 700;
+    font-size: 12px;
+    margin-bottom: 6px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid var(--border, #2d3548);
+}
+
+.signal-tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 2px 0;
+}
+
+.signal-tooltip-label {
+    color: var(--text-secondary, #8892a4);
+}
+
+.signal-tooltip-value {
+    color: var(--text-primary, #e0e6f0);
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+}
+
 /* ── Sidebar ───────────────────────────────────────────────── */
 .sidebar {
     width: 280px;

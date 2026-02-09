@@ -4,7 +4,7 @@ Bridges the application layer (reversal_pro core) with the API.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
 import numpy as np
@@ -27,6 +27,8 @@ from reversal_pro.domain.enums import SignalMode, SensitivityPreset, Calculation
 from reversal_pro.domain.value_objects import SensitivityConfig
 from reversal_pro.domain.value_objects import OHLCVBar as CoreOHLCVBar
 from reversal_pro.application.use_cases.detect_reversals import DetectReversalsUseCase
+
+from ..services.telegram_service import telegram_service
 
 logger = logging.getLogger(__name__)
 
@@ -263,11 +265,40 @@ class AnalysisService:
                 if ind.ema_21 is not None and ind.ema_21 > 0:
                     ema21_data.append(LineData(time=ts, value=ind.ema_21))
 
+        # Load persisted detected_at timestamps from DB
+        sig_rows = await db.execute(text(
+            "SELECT time, is_bullish, detected_at FROM signals "
+            "WHERE symbol = :s AND timeframe = :tf"
+        ), {"s": symbol, "tf": timeframe})
+        detected_at_map = {}
+        for row in sig_rows.fetchall():
+            sig_ts = int(row[0].timestamp())
+            detected_at_map[(sig_ts, row[1])] = row[2]
+
         # Markers for reversal signals
         markers = []
+        # Compute candle interval in seconds for delay calculation
+        candle_interval = 60  # default 1m
+        if len(analysis.bars) >= 2:
+            candle_interval = int(
+                analysis.bars[1].time.timestamp() - analysis.bars[0].time.timestamp()
+            )
+            if candle_interval <= 0:
+                candle_interval = 60
+
         for sig in analysis.signals:
             if sig.bar_index < len(analysis.bars):
                 ts = int(analysis.bars[sig.bar_index].time.timestamp())
+                db_detected = detected_at_map.get((ts, sig.is_bullish))
+                detected_at_str = db_detected.isoformat() if db_detected else datetime.now(timezone.utc).isoformat()
+
+                # candles_delay = number of candles between signal bar and detection time
+                if db_detected:
+                    delay_seconds = int(db_detected.timestamp()) - ts
+                    candles_delay = max(0, delay_seconds // candle_interval)
+                else:
+                    candles_delay = 0
+
                 markers.append(MarkerData(
                     time=ts,
                     position="belowBar" if sig.is_bullish else "aboveBar",
@@ -275,6 +306,8 @@ class AnalysisService:
                     shape="arrowUp" if sig.is_bullish else "arrowDown",
                     text=f"{'▲' if sig.is_bullish else '▼'} {sig.label} {sig.price:,.2f}",
                     size=2 if not sig.is_preview else 1,
+                    detected_at=detected_at_str,
+                    candles_delay=candles_delay,
                 ))
 
         # Sort markers by time (required by lightweight-charts)
@@ -335,20 +368,48 @@ class AnalysisService:
             await db.commit()
 
     async def _persist_signals(self, db, bars_data, result, request):
-        """Store detected signals."""
+        """Store detected signals, preserving original detected_at for known signals."""
         if not result.signals:
             return
 
-        # Delete previous signals for this symbol/timeframe
+        # 1. Load existing detected_at timestamps for this symbol/timeframe
+        existing = await db.execute(text(
+            "SELECT time, is_bullish, detected_at FROM signals "
+            "WHERE symbol = :s AND timeframe = :tf"
+        ), {"s": request.symbol, "tf": request.timeframe})
+        existing_map = {}
+        for row in existing.fetchall():
+            existing_map[(row[0], row[1])] = row[2]
+
+        # 2. Delete all current signals
         await db.execute(text(
             "DELETE FROM signals WHERE symbol = :s AND timeframe = :tf"
         ), {"s": request.symbol, "tf": request.timeframe})
 
+        # 3. Re-insert with preserved or new detected_at
+        #    and collect truly new signals for Telegram notification
+        now = datetime.now(timezone.utc)
+        new_signals_for_telegram = []
         for sig in result.signals:
             if sig.bar_index >= len(bars_data):
                 continue
+            sig_time = datetime.fromisoformat(bars_data[sig.bar_index]["time"])
+            # Reuse original detected_at if the signal was already known
+            original_detected = existing_map.get((sig_time, sig.is_bullish))
+
+            if not original_detected:
+                # This is a truly new signal
+                new_signals_for_telegram.append({
+                    "symbol": request.symbol,
+                    "timeframe": request.timeframe,
+                    "is_bullish": sig.is_bullish,
+                    "price": sig.price,
+                    "actual_price": sig.actual_price,
+                    "signal_time": sig_time,
+                })
+
             s = Signal(
-                time=datetime.fromisoformat(bars_data[sig.bar_index]["time"]),
+                time=sig_time,
                 symbol=request.symbol,
                 timeframe=request.timeframe,
                 bar_index=sig.bar_index,
@@ -357,10 +418,34 @@ class AnalysisService:
                 is_bullish=sig.is_bullish,
                 is_preview=sig.is_preview,
                 signal_label=sig.label,
+                detected_at=original_detected if original_detected else now,
             )
             db.add(s)
 
         await db.commit()
+
+        # Send Telegram notification for the latest new signal only
+        if new_signals_for_telegram:
+            # Filter: only recent signals (within last 3 candles)
+            if len(bars_data) >= 2:
+                t1 = datetime.fromisoformat(bars_data[-1]["time"])
+                t0 = datetime.fromisoformat(bars_data[-2]["time"])
+                candle_interval = (t1 - t0).total_seconds()
+                recent_threshold = t1 - timedelta(
+                    seconds=candle_interval * 3
+                )
+                new_signals_for_telegram = [
+                    s for s in new_signals_for_telegram
+                    if s["signal_time"].replace(tzinfo=None) >= recent_threshold.replace(tzinfo=None)
+                ]
+
+            if new_signals_for_telegram:
+                # Keep only the most recent one
+                latest = max(new_signals_for_telegram, key=lambda s: s["signal_time"])
+                try:
+                    await telegram_service.notify_new_signal(latest)
+                except Exception as e:
+                    logger.warning(f"Failed to send Telegram signal notification: {e}")
 
     async def _persist_zones(self, db, bars_data, result, request):
         """Store supply/demand zones."""

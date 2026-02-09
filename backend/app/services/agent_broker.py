@@ -45,12 +45,9 @@ class AgentBrokerService:
                            sensitivity: str = "Medium", signal_mode: str = "Confirmed Only",
                            analysis_limit: int = 500) -> Agent:
         """Create a new agent with auto-generated name."""
-        # Get next ID for naming
-        result = await db.execute(text("SELECT COALESCE(MAX(id), 0) + 1 FROM agents"))
-        next_id = result.scalar()
-
+        # Create agent with temporary name
         agent = Agent(
-            name=f"agent_{next_id}",
+            name=f"agent_temp_{datetime.now(timezone.utc).timestamp()}",
             symbol=symbol,
             timeframe=timeframe,
             trade_amount=trade_amount,
@@ -62,6 +59,10 @@ class AgentBrokerService:
             analysis_limit=analysis_limit,
         )
         db.add(agent)
+        await db.flush()  # Get the auto-generated ID
+        
+        # Update name with actual ID
+        agent.name = f"agent_{agent.id}"
         await db.commit()
         await db.refresh(agent)
 
@@ -75,21 +76,21 @@ class AgentBrokerService:
         return agent
 
     async def delete_agent(self, db: AsyncSession, agent_id: int) -> bool:
-        """Delete agent and close all open positions."""
+        """Delete agent - all positions and logs will be cascade deleted."""
         agent = await db.get(Agent, agent_id)
         if not agent:
             return False
 
-        # Close all open positions first
-        open_positions = await self._get_open_positions(db, agent_id)
-        for pos in open_positions:
-            await self._close_position_internal(db, pos, reason="AGENT_DELETED")
-
+        agent_name = agent.name
+        
+        # Stop agent if running
         self._running_agents.pop(agent_id, None)
+        
+        # Delete agent - cascade will automatically delete all positions and logs
         await db.delete(agent)
         await db.commit()
 
-        logger.info(f"Agent deleted: {agent.name}")
+        logger.info(f"Agent deleted: {agent_name} (all positions and logs cascade deleted)")
         return True
 
     async def toggle_agent(self, db: AsyncSession, agent_id: int) -> Optional[Agent]:
@@ -508,6 +509,7 @@ class AgentBrokerService:
             stop_loss=sl,
             take_profit=tp,
             quantity=order_result.quantity or (trade_amount / current_price),
+            invested_eur=trade_amount,  # Store EUR amount invested for balance restoration
             status="OPEN",
             entry_signal_id=signal_id,
         )
@@ -568,27 +570,29 @@ class AgentBrokerService:
 
         actual_exit = order_result.filled_price if order_result.success else exit_price
 
-        # Calculate PnL
+        # Calculate PnL in USDT (prices are USDT on Hyperliquid)
         if pos.side == "LONG":
-            pnl = (actual_exit - pos.entry_price) * pos.quantity
+            pnl_usdt = (actual_exit - pos.entry_price) * pos.quantity
             pnl_pct = ((actual_exit - pos.entry_price) / pos.entry_price) * 100
         else:  # SHORT
-            pnl = (pos.entry_price - actual_exit) * pos.quantity
+            pnl_usdt = (pos.entry_price - actual_exit) * pos.quantity
             pnl_pct = ((pos.entry_price - actual_exit) / pos.entry_price) * 100
 
+        # Convert PnL to EUR for storage
+        pnl_eur = await hyperliquid_client.convert_usdt_to_eur(pnl_usdt)
+
         pos.exit_price = actual_exit
-        pos.pnl = round(pnl, 4)
+        pos.pnl = round(pnl_eur, 4)
         pos.pnl_percent = round(pnl_pct, 2)
         pos.status = "STOPPED" if reason == "STOP_LOSS" else "CLOSED"
         pos.exit_signal_id = exit_signal_id
         pos.closed_at = datetime.now(timezone.utc)
 
-        # Restore balance to agent: engaged amount + PnL
-        # The engaged amount was agent.trade_amount at position open time,
-        # we recalculate from entry_price * quantity (actual engaged value)
-        engaged_value = pos.entry_price * pos.quantity
+        # Restore balance to agent in EUR
+        # Use invested_eur (stored at open time) + pnl_eur to avoid exchange rate drift
+        invested_eur = pos.invested_eur or agent.trade_amount
         if agent:
-            agent.balance = round(engaged_value + pnl, 2)
+            agent.balance = round(invested_eur + pnl_eur, 2)
 
         await db.commit()
         await db.refresh(pos)
@@ -635,15 +639,18 @@ class AgentBrokerService:
 
     async def _update_unrealized_pnl(self, db: AsyncSession, pos: AgentPosition,
                                      current_price: float):
-        """Update unrealized PnL on an open position."""
+        """Update unrealized PnL on an open position (converted to EUR)."""
         if pos.side == "LONG":
-            pnl = (current_price - pos.entry_price) * pos.quantity
+            pnl_usdt = (current_price - pos.entry_price) * pos.quantity
             pnl_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
         else:  # SHORT
-            pnl = (pos.entry_price - current_price) * pos.quantity
+            pnl_usdt = (pos.entry_price - current_price) * pos.quantity
             pnl_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100
 
-        pos.unrealized_pnl = round(pnl, 4)
+        # Convert to EUR
+        pnl_eur = await hyperliquid_client.convert_usdt_to_eur(pnl_usdt)
+
+        pos.unrealized_pnl = round(pnl_eur, 4)
         pos.unrealized_pnl_percent = round(pnl_pct, 2)
         pos.current_price = current_price
         pos.pnl_updated_at = datetime.now(timezone.utc)
@@ -713,6 +720,10 @@ class AgentBrokerService:
     # ── Statistics ───────────────────────────────────────────
     async def get_agent_stats(self, db: AsyncSession, agent_id: int) -> dict:
         """Get statistics for an agent."""
+        agent = await db.get(Agent, agent_id)
+        if not agent:
+            return {"open_positions": 0, "total_pnl": 0, "total_unrealized_pnl": 0}
+        
         # Open positions count
         open_result = await db.execute(text("""
             SELECT COUNT(*) FROM agent_positions
@@ -720,12 +731,12 @@ class AgentBrokerService:
         """), {"id": agent_id})
         open_count = open_result.scalar()
 
-        # Total realized PnL
-        pnl_result = await db.execute(text("""
+        # Realized PnL = sum of pnl from closed/stopped positions
+        realized_result = await db.execute(text("""
             SELECT COALESCE(SUM(pnl), 0) FROM agent_positions
             WHERE agent_id = :id AND status IN ('CLOSED', 'STOPPED')
         """), {"id": agent_id})
-        total_pnl = pnl_result.scalar()
+        total_pnl = realized_result.scalar()
 
         # Total unrealized PnL (open positions)
         unrealized_result = await db.execute(text("""
@@ -736,17 +747,17 @@ class AgentBrokerService:
 
         return {
             "open_positions": open_count,
-            "total_pnl": round(total_pnl, 4),
-            "total_unrealized_pnl": round(total_unrealized_pnl, 4),
+            "total_pnl": round(float(total_pnl), 4),
+            "total_unrealized_pnl": round(float(total_unrealized_pnl), 4),
         }
 
     async def get_total_realized_pnl(self, db: AsyncSession) -> float:
-        """Get total realized PnL across all agents."""
+        """Get total realized PnL across all agents (sum of PnL from closed positions)."""
         result = await db.execute(text("""
             SELECT COALESCE(SUM(pnl), 0) FROM agent_positions
             WHERE status IN ('CLOSED', 'STOPPED')
         """))
-        return round(result.scalar(), 4)
+        return round(float(result.scalar()), 4)
 
 
 # Singleton

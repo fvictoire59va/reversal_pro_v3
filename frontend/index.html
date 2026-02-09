@@ -31,10 +31,10 @@
                 </select>
             </div>
             <div class="timeframe-buttons" id="timeframeButtons">
-                <button class="tf-btn" data-tf="1m">1m</button>
+                <button class="tf-btn active" data-tf="1m">1m</button>
                 <button class="tf-btn" data-tf="5m">5m</button>
                 <button class="tf-btn" data-tf="15m">15m</button>
-                <button class="tf-btn active" data-tf="1h">1H</button>
+                <button class="tf-btn" data-tf="1h">1H</button>
                 <button class="tf-btn" data-tf="4h">4H</button>
                 <button class="tf-btn" data-tf="1d">1D</button>
             </div>
@@ -66,8 +66,8 @@
             <select id="sensitivitySelect">
                 <option value="Very High">Very High</option>
                 <option value="High">High</option>
-                <option value="Medium" selected>Medium</option>
-                <option value="Low">Low</option>
+                <option value="Medium">Medium</option>
+                <option value="Low" selected>Low</option>
                 <option value="Very Low">Very Low</option>
             </select>
         </div>
@@ -158,23 +158,24 @@
         <!-- Chart container -->
         <div class="chart-wrapper">
             <div id="chartContainer" class="chart-container"></div>
+            <!-- Signal detection tooltip -->
+            <div id="signalTooltip" class="signal-tooltip" style="display:none;">
+                <div class="signal-tooltip-header" id="signalTooltipHeader"></div>
+                <div class="signal-tooltip-row">
+                    <span class="signal-tooltip-label">Détection :</span>
+                    <span id="signalTooltipDetectedAt" class="signal-tooltip-value"></span>
+                </div>
+                <div class="signal-tooltip-row">
+                    <span class="signal-tooltip-label">Délai :</span>
+                    <span id="signalTooltipDelay" class="signal-tooltip-value"></span>
+                </div>
+            </div>
             <div id="chartLegend" class="chart-legend">
                 <span class="legend-item"><span class="legend-dot dot-ema9"></span>EMA 9</span>
                 <span class="legend-item"><span class="legend-dot dot-ema14"></span>EMA 14</span>
                 <span class="legend-item"><span class="legend-dot dot-ema21"></span>EMA 21</span>
             </div>
         </div>
-
-        <!-- Signals sidebar -->
-        <aside class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <h3>Signals</h3>
-                <button class="btn-icon" id="toggleSidebar" title="Toggle">☰</button>
-            </div>
-            <div class="signals-list" id="signalsList">
-                <div class="empty-state">Load data to see signals</div>
-            </div>
-        </aside>
     </main>
 
     <!-- ═══════════════════════════════════════════════════════ -->

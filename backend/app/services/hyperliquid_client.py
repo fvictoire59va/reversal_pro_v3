@@ -119,6 +119,11 @@ class HyperliquidClient:
         rate = await self.get_eur_usdt_rate()
         return eur_amount * rate
 
+    async def convert_usdt_to_eur(self, usdt_amount: float) -> float:
+        """Convert USDT amount to EUR."""
+        rate = await self.get_eur_usdt_rate()
+        return usdt_amount / rate
+
     # ── Market data ──────────────────────────────────────────
     async def get_mid_price(self, symbol: str) -> Optional[float]:
         """Get current mid price for a symbol from Hyperliquid."""

@@ -12,12 +12,14 @@ import {
 // ── State ───────────────────────────────────────────────────
 let chart = null;
 let currentSymbol = 'BTC/USDT';
-let currentTimeframe = '1h';
-let currentSensitivity = 'Medium';
+let currentTimeframe = '1m';
+let currentSensitivity = 'Low';
 let currentSignalMode = 'Confirmed Only';
 let currentLimit = 500;
-let isLiveMode = false;
+let isLiveMode = true;
 let liveInterval = null;
+let knownSignalKeys = new Set(); // Track known signal keys to detect new ones
+let isFirstLoad = true;          // Skip bell on initial load
 
 // ── DOM refs ────────────────────────────────────────────────
 const symbolSelect = document.getElementById('symbolSelect');
@@ -33,9 +35,6 @@ const csvFileInput = document.getElementById('csvFileInput');
 const loadingOverlay = document.getElementById('loadingOverlay');
 const statusText = document.getElementById('statusText');
 const statusTime = document.getElementById('statusTime');
-const signalsList = document.getElementById('signalsList');
-const toggleSidebar = document.getElementById('toggleSidebar');
-const sidebar = document.getElementById('sidebar');
 
 // Position tool buttons
 const longToolBtn = document.getElementById('longToolBtn');
@@ -98,10 +97,6 @@ function init() {
     uploadBtn.addEventListener('click', () => csvFileInput.click());
     csvFileInput.addEventListener('change', handleCSVUpload);
 
-    toggleSidebar.addEventListener('click', () => {
-        sidebar.classList.toggle('collapsed');
-    });
-
     // Position tool listeners
     longToolBtn.addEventListener('click', () => {
         longToolBtn.classList.toggle('active');
@@ -140,8 +135,8 @@ function init() {
     // Initial load
     setStatus('Ready — click Refresh or Fetch to load data');
 
-    // Auto-load after short delay
-    setTimeout(() => loadChart(), 500);
+    // Auto-start live mode after short delay
+    setTimeout(() => startLiveMode(), 500);
 
     // ── Agent Broker init ───────────────────────────────────
     initAgentBroker();
@@ -172,7 +167,7 @@ async function loadChart() {
 
         chart.setData(data);
         updateInfoPanel(data);
-        updateSignalsList(data.markers || []);
+        checkNewSignals(data);
         
         // Load and display agent positions for this chart
         try {
@@ -257,6 +252,76 @@ async function handleCSVUpload(e) {
     csvFileInput.value = '';
 }
 
+// ── Signal sound notification ───────────────────────────────
+function playBellSound() {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const now = ctx.currentTime;
+
+        // Bell-like tone: two short chimes
+        [0, 0.15].forEach(offset => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(1200, now + offset);
+            osc.frequency.exponentialRampToValueAtTime(800, now + offset + 0.3);
+            gain.gain.setValueAtTime(0.35, now + offset);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.4);
+            osc.connect(gain).connect(ctx.destination);
+            osc.start(now + offset);
+            osc.stop(now + offset + 0.4);
+        });
+
+        // Clean up context after sound finishes
+        setTimeout(() => ctx.close(), 1000);
+    } catch (e) {
+        console.warn('Could not play bell sound:', e);
+    }
+}
+
+function checkNewSignals(data) {
+    const markers = data.markers || [];
+    const candles = data.candles || [];
+    // Use time + direction as stable key (price/text can shift on recalc)
+    const currentKeys = new Set(
+        markers.map(m => `${m.time}_${m.shape}`)
+    );
+
+    if (isFirstLoad) {
+        // First load — just memorize, no sound
+        knownSignalKeys = currentKeys;
+        isFirstLoad = false;
+        return;
+    }
+
+    // Determine the recent time threshold (last 3 candle intervals)
+    // Only alert for truly new signals on recent candles, not old ones
+    // that appear/disappear due to the sliding window edge
+    let recentThreshold = 0;
+    if (candles.length >= 2) {
+        const interval = candles[candles.length - 1].time - candles[candles.length - 2].time;
+        recentThreshold = candles[candles.length - 1].time - interval * 3;
+    }
+
+    // Only trigger on signals we haven't seen AND that are recent
+    let newSignals = 0;
+    for (const key of currentKeys) {
+        if (!knownSignalKeys.has(key)) {
+            const sigTime = parseInt(key.split('_')[0], 10);
+            if (sigTime >= recentThreshold) {
+                newSignals++;
+            }
+        }
+    }
+
+    if (newSignals > 0) {
+        playBellSound();
+        console.log(`🔔 ${newSignals} new signal(s) detected!`);
+    }
+
+    knownSignalKeys = currentKeys;
+}
+
 // ── Update info panel ───────────────────────────────────────
 function updateInfoPanel(data) {
     // Trend
@@ -278,45 +343,6 @@ function updateInfoPanel(data) {
     const bullish = (data.markers || []).filter(m => m.shape === 'arrowUp').length;
     const bearish = (data.markers || []).filter(m => m.shape === 'arrowDown').length;
     signalsCount.innerHTML = `<span style="color:#00ff88">${bullish}▲</span> / <span style="color:#ff4466">${bearish}▼</span>`;
-}
-
-// ── Update signals list ─────────────────────────────────────
-function updateSignalsList(markers) {
-    if (!markers.length) {
-        signalsList.innerHTML = '<div class="empty-state">No signals detected</div>';
-        return;
-    }
-
-    // Show most recent first
-    const sorted = [...markers].sort((a, b) => b.time - a.time);
-    const html = sorted.map(m => {
-        const isBull = m.shape === 'arrowUp';
-        const cls = isBull ? 'bullish' : 'bearish';
-        const arrow = isBull ? '▲' : '▼';
-        const type = isBull ? 'BULLISH' : 'BEARISH';
-        const date = new Date(m.time * 1000);
-        const timeStr = date.toLocaleString('fr-FR', {
-            day: '2-digit', 
-            month: '2-digit',
-            year: 'numeric',
-            hour: '2-digit', 
-            minute: '2-digit',
-            second: '2-digit',
-            timeZone: 'Europe/Paris',
-        });
-
-        return `
-            <div class="signal-card ${cls}">
-                <div class="signal-header">
-                    <span class="signal-type">${arrow} ${type}</span>
-                    <span class="signal-time">${timeStr}</span>
-                </div>
-                <div class="signal-price">${m.text}</div>
-            </div>
-        `;
-    }).join('');
-
-    signalsList.innerHTML = html;
 }
 
 // ── Helpers ─────────────────────────────────────────────────

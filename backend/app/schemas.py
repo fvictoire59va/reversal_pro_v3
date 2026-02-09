@@ -110,6 +110,8 @@ class MarkerData(BaseModel):
     shape: str  # "arrowUp", "arrowDown", "circle"
     text: str
     size: int = 2
+    detected_at: Optional[str] = None   # ISO datetime of detection
+    candles_delay: Optional[int] = None  # candles between signal and detection
 
 
 class ChartDataResponse(BaseModel):

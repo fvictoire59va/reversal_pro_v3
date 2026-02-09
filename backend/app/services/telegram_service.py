@@ -166,6 +166,30 @@ class TelegramService:
         text = f"⏸️ *Agent Deactivated*\n\n*Name:* `{agent_name}`"
         await self.send_message(text)
 
+    async def notify_new_signal(self, sig: dict):
+        """
+        Notify when a new reversal signal is detected (one per timeframe).
+        
+        Args:
+            sig: dict with keys:
+                symbol, timeframe, is_bullish, price, actual_price, signal_time
+        """
+        direction = "BULLISH ▲" if sig["is_bullish"] else "BEARISH ▼"
+        emoji = "🟢" if sig["is_bullish"] else "🔴"
+        sig_time = sig["signal_time"]
+        time_str = sig_time.strftime("%d/%m/%Y %H:%M")
+
+        text = (
+            f"{emoji} *Signal Detected*\n\n"
+            f"*Direction:* `{direction}`\n"
+            f"*Symbol:* `{sig['symbol']}`\n"
+            f"*Timeframe:* `{sig['timeframe']}`\n"
+            f"*Price:* `{sig['price']:,.2f}`\n"
+            f"*Candle:* `{time_str}`"
+        )
+
+        await self.send_message(text)
+
     # ── Command handlers ─────────────────────────────────────
     async def get_agents_summary(self, db: AsyncSession) -> str:
         """Generate agents summary for /agents command."""
@@ -242,6 +266,7 @@ class TelegramService:
             "/positions - Show open positions\n"
             "/help - Show this help message\n\n"
             "_Automatic notifications are sent for:_\n"
+            "• New reversal signals detected\n"
             "• Positions opened/closed\n"
             "• Agent activation/deactivation"
         )

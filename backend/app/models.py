@@ -56,6 +56,7 @@ class Signal(Base):
     is_bullish = Column(Boolean, nullable=False)
     is_preview = Column(Boolean, nullable=False, default=False)
     signal_label = Column(String, nullable=False, default="REVERSAL")
+    detected_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
@@ -141,6 +142,7 @@ class AgentPosition(Base):
     stop_loss = Column(Float, nullable=False)
     take_profit = Column(Float)
     quantity = Column(Float, nullable=False)
+    invested_eur = Column(Float)  # EUR amount invested at open (to restore balance correctly)
     status = Column(String(10), nullable=False, default="OPEN")  # OPEN, CLOSED, STOPPED
     entry_signal_id = Column(Integer)
     exit_signal_id = Column(Integer)

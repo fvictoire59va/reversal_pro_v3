@@ -31,6 +31,7 @@ export class ChartManager {
         this.agentZoneSeries = [];    // TP/SL colored zone series
         this.signalMarkers = [];      // Reversal signal markers (from analysis)
         this.agentMarkers = [];       // Agent position entry markers
+        this.signalMeta = {};         // Signal metadata keyed by Paris-shifted time
         this.lastCandleTime = null;   // Last candle time (Paris-shifted)
         
         // Position Tool state
@@ -83,7 +84,7 @@ export class ChartManager {
                 timeVisible: true,
                 secondsVisible: false,
                 barSpacing: 8,
-                rightOffset: 40,
+                rightOffset: 15,
             },
             handleScroll: true,
             handleScale: true,
@@ -142,6 +143,76 @@ export class ChartManager {
             this.chart.applyOptions({ width, height });
         });
         this._resizeObserver.observe(this.container);
+
+        // ── Signal tooltip on crosshair move ──
+        this._tooltipEl = document.getElementById('signalTooltip');
+        this.chart.subscribeCrosshairMove(param => this._handleCrosshairMove(param));
+    }
+
+    /**
+     * Show/hide the signal detection tooltip when crosshair is on a signal candle.
+     */
+    _handleCrosshairMove(param) {
+        const tooltip = this._tooltipEl;
+        if (!tooltip) return;
+
+        if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
+            tooltip.style.display = 'none';
+            return;
+        }
+
+        const meta = this.signalMeta[param.time];
+        if (!meta) {
+            tooltip.style.display = 'none';
+            return;
+        }
+
+        // Fill tooltip content
+        const headerEl = document.getElementById('signalTooltipHeader');
+        const detectedEl = document.getElementById('signalTooltipDetectedAt');
+        const delayEl = document.getElementById('signalTooltipDelay');
+
+        const dirLabel = meta.isBullish ? '▲ BULLISH' : '▼ BEARISH';
+        const dirColor = meta.isBullish ? '#00aa55' : '#dd3344';
+        headerEl.textContent = dirLabel;
+        headerEl.style.color = dirColor;
+
+        // Format detected_at to Paris time
+        if (meta.detectedAt) {
+            const dt = new Date(meta.detectedAt);
+            detectedEl.textContent = dt.toLocaleString('fr-FR', {
+                timeZone: 'Europe/Paris',
+                day: '2-digit', month: '2-digit', year: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+            });
+        } else {
+            detectedEl.textContent = '—';
+        }
+
+        delayEl.textContent = meta.candlesDelay != null
+            ? `${meta.candlesDelay} bougie${meta.candlesDelay > 1 ? 's' : ''}`
+            : '—';
+
+        // Position tooltip near the crosshair
+        const chartRect = this.container.getBoundingClientRect();
+        const wrapperRect = this.container.parentElement.getBoundingClientRect();
+        let left = param.point.x + 16;
+        let top = param.point.y - 10;
+
+        // Keep tooltip inside chart bounds
+        const tooltipW = tooltip.offsetWidth || 220;
+        const tooltipH = tooltip.offsetHeight || 80;
+        if (left + tooltipW > chartRect.width) {
+            left = param.point.x - tooltipW - 16;
+        }
+        if (top + tooltipH > chartRect.height) {
+            top = chartRect.height - tooltipH - 8;
+        }
+        if (top < 0) top = 8;
+
+        tooltip.style.left = `${left}px`;
+        tooltip.style.top = `${top}px`;
+        tooltip.style.display = 'block';
     }
 
     /**
@@ -152,8 +223,9 @@ export class ChartManager {
         const shiftTime = (item) => ({ ...item, time: utcToParisTimestamp(item.time) });
 
         // Candles
+        let shiftedCandles = [];
         if (data.candles?.length) {
-            const shiftedCandles = data.candles.map(shiftTime);
+            shiftedCandles = data.candles.map(shiftTime);
             this.candleSeries.setData(shiftedCandles);
             this.lastCandleTime = shiftedCandles[shiftedCandles.length - 1].time;
         }
@@ -176,6 +248,20 @@ export class ChartManager {
         // Markers (reversal signals) — store separately for agent overlay
         this.signalMarkers = data.markers?.length ? data.markers.map(shiftTime) : [];
         this.agentMarkers = []; // Reset agent markers when new data loads
+
+        // Build signal metadata map keyed by Paris-shifted time
+        this.signalMeta = {};
+        if (data.markers?.length) {
+            for (const m of data.markers) {
+                const shiftedTime = utcToParisTimestamp(m.time);
+                this.signalMeta[shiftedTime] = {
+                    isBullish: m.shape === 'arrowUp',
+                    detectedAt: m.detected_at || null,
+                    candlesDelay: m.candles_delay != null ? m.candles_delay : null,
+                };
+            }
+        }
+
         this.candleSeries.setMarkers(this.signalMarkers);
 
         // Supply/Demand zones as price lines
@@ -184,8 +270,21 @@ export class ChartManager {
             this._drawZones(data.zones, data.candles);
         }
 
-        // Fit content
-        this.chart.timeScale().fitContent();
+        // Zoom to last 100 candles with rightOffset space after last candle
+        if (shiftedCandles.length) {
+            const timeScale = this.chart.timeScale();
+            const totalBars = shiftedCandles.length;
+            const visibleBars = Math.min(100, totalBars);
+            
+            // Use scrollToPosition to place the last bar with rightOffset space
+            timeScale.setVisibleLogicalRange({
+                from: totalBars - visibleBars,
+                to: totalBars - 1 + 15,  // Add 15 bars of empty space to the right
+            });
+        } else {
+            // Fallback if no candles
+            this.chart.timeScale().fitContent();
+        }
     }
 
     /**

@@ -146,6 +146,8 @@ class AgentPosition(Base):
     status = Column(String(10), nullable=False, default="OPEN")  # OPEN, CLOSED, STOPPED
     entry_signal_id = Column(Integer)
     exit_signal_id = Column(Integer)
+    entry_signal_time = Column(DateTime(timezone=True))      # Stable signal key (survives re-analysis)
+    entry_signal_is_bullish = Column(Boolean)                 # Stable signal direction
     pnl = Column(Float)
     pnl_percent = Column(Float)
     unrealized_pnl = Column(Float)

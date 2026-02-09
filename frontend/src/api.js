@@ -140,6 +140,12 @@ export async function getAgentLogs(agentId, limit = 50) {
     return res.json();
 }
 
+export async function getAgentPerformance(agentId) {
+    const res = await fetch(`${API_BASE}/agents/${agentId}/performance`);
+    if (!res.ok) return null;
+    return res.json();
+}
+
 export async function getAgentPositionsForChart(symbol, timeframe) {
     const urlSymbol = symbol.replace('/', '-');
     const res = await fetch(`${API_BASE}/agents/positions-by-chart/${urlSymbol}/${timeframe}`);

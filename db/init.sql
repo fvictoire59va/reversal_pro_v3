@@ -157,6 +157,8 @@ CREATE TABLE IF NOT EXISTS agent_positions (
     status          VARCHAR(10) NOT NULL DEFAULT 'OPEN',  -- OPEN, CLOSED, STOPPED
     entry_signal_id INTEGER,
     exit_signal_id  INTEGER,
+    entry_signal_time TIMESTAMPTZ,
+    entry_signal_is_bullish BOOLEAN,
     pnl             DOUBLE PRECISION,
     pnl_percent     DOUBLE PRECISION,
     opened_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),

@@ -155,6 +155,20 @@
     <!-- MAIN CONTENT -->
     <!-- ═══════════════════════════════════════════════════════ -->
     <main class="main-content">
+        <!-- Agent Performance Tree Panel -->
+        <aside class="perf-tree-panel" id="perfTreePanel">
+            <div class="perf-tree-header">
+                <span class="perf-tree-title">📊 Performance</span>
+                <select id="perfAgentSelect" class="perf-agent-select">
+                    <option value="">— Agent —</option>
+                </select>
+                <button class="perf-tree-toggle" id="perfTreeToggle" title="Réduire">◀</button>
+            </div>
+            <div class="perf-tree-body" id="perfTreeBody">
+                <div class="perf-tree-empty">Sélectionner un agent</div>
+            </div>
+        </aside>
+
         <!-- Chart container -->
         <div class="chart-wrapper">
             <div id="chartContainer" class="chart-container"></div>

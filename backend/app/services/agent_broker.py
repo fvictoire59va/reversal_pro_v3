@@ -15,6 +15,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, List, Dict
 
+import redis.asyncio as aioredis
 from sqlalchemy import text, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +39,8 @@ class AgentBrokerService:
 
     def __init__(self):
         self._running_agents: Dict[int, bool] = {}
+        settings = get_settings()
+        self._redis = aioredis.from_url(settings.redis_url)
 
     # ── Agent CRUD ───────────────────────────────────────────
     async def create_agent(self, db: AsyncSession, symbol: str, timeframe: str,
@@ -186,18 +189,14 @@ class AgentBrokerService:
         2. Get the latest signal
         3. Decide whether to open/close positions
         
-        Uses PostgreSQL advisory lock to prevent concurrent execution
+        Uses Redis distributed lock to prevent concurrent execution
         across multiple uvicorn workers.
         """
-        # Use PostgreSQL advisory lock (works across workers/processes)
-        # pg_try_advisory_xact_lock returns true if lock acquired, false if already held
-        lock_id = 100000 + agent.id  # unique lock ID per agent
-        lock_result = await db.execute(
-            text("SELECT pg_try_advisory_xact_lock(:lock_id)"),
-            {"lock_id": lock_id}
-        )
-        acquired = lock_result.scalar()
-        
+        # Use Redis distributed lock (survives DB commits unlike pg_try_advisory_xact_lock)
+        lock_key = f"agent_cycle_lock:{agent.id}"
+        lock = self._redis.lock(lock_key, timeout=120, blocking=False)
+        acquired = await lock.acquire(blocking=False)
+
         if not acquired:
             logger.debug(f"[{agent.name}] Cycle already running in another worker, skipping")
             return
@@ -229,16 +228,22 @@ class AgentBrokerService:
             # 3. Check if this signal was already processed
             open_positions = await self._get_open_positions(db, agent.id)
 
-            # Get current price
+            # Get current price + high/low for SL/TP checks
             current_price = await self._get_current_price(db, agent.symbol, agent.timeframe)
             if not current_price:
                 logger.warning(f"[{agent.name}] Cannot determine current price")
                 return
 
-            # 4. Check stop losses on open positions
+            candle_range = await self._get_latest_candle_range(db, agent.symbol, agent.timeframe)
+            candle_high = candle_range["high"] if candle_range else current_price
+            candle_low = candle_range["low"] if candle_range else current_price
+
+            # 4. Check stop losses and take profits on open positions
             for pos in open_positions:
-                if await self._check_stop_loss(db, agent, pos, current_price):
+                if await self._check_stop_loss(db, agent, pos, current_price, candle_low, candle_high):
                     continue  # Position was stopped out
+                if await self._check_take_profit(db, agent, pos, current_price, candle_low, candle_high):
+                    continue  # Position hit take profit
                 # Update unrealized PnL for surviving open positions
                 await self._update_unrealized_pnl(db, pos, current_price)
 
@@ -352,6 +357,11 @@ class AgentBrokerService:
         except Exception as e:
             logger.error(f"[{agent.name}] Cycle error: {e}", exc_info=True)
             await self._log(db, agent.id, "CYCLE_ERROR", {"error": str(e)})
+        finally:
+            try:
+                await lock.release()
+            except Exception:
+                pass  # Lock may have expired
 
     async def run_all_active_agents(self, db: AsyncSession):
         """Run one cycle for all active agents. Called by the scheduler."""
@@ -403,6 +413,18 @@ class AgentBrokerService:
         })
         row = result.fetchone()
         return row[0] if row else None
+
+    async def _get_latest_candle_range(self, db: AsyncSession, symbol: str, timeframe: str) -> Optional[dict]:
+        """Get high and low from the latest OHLCV candle (for SL/TP wick detection)."""
+        result = await db.execute(text("""
+            SELECT high, low, close FROM ohlcv
+            WHERE symbol = :symbol AND timeframe = :timeframe
+            ORDER BY time DESC LIMIT 1
+        """), {"symbol": symbol, "timeframe": timeframe})
+        row = result.fetchone()
+        if row:
+            return {"high": row[0], "low": row[1], "close": row[2]}
+        return None
 
     async def _get_current_price(self, db: AsyncSession, symbol: str, timeframe: str) -> Optional[float]:
         """Get current price from the latest OHLCV candle, or from Hyperliquid."""
@@ -470,8 +492,31 @@ class AgentBrokerService:
                              side: str, current_price: float, signal_id: int,
                              amount: Optional[float] = None):
         """Open a new position using agent's full balance."""
+        # ── Defensive guard: re-check DB state with row lock ──
+        # Lock the agent row to prevent concurrent opens
+        row = await db.execute(
+            text("SELECT balance FROM agents WHERE id = :aid FOR UPDATE"),
+            {"aid": agent.id}
+        )
+        db_balance = row.scalar()
+        if db_balance is None or db_balance <= 0:
+            logger.warning(f"[agent_{agent.id}] Balance is {db_balance} (race guard), skipping open")
+            return
+
+        # Also verify no open position already exists for this agent
+        dup_check = await db.execute(text("""
+            SELECT COUNT(*) FROM agent_positions
+            WHERE agent_id = :aid AND status = 'OPEN'
+        """), {"aid": agent.id})
+        if dup_check.scalar() > 0:
+            logger.warning(f"[agent_{agent.id}] Open position already exists (race guard), skipping")
+            return
+
         settings = get_settings()
-        trade_amount = agent.balance
+        trade_amount = db_balance  # Use the freshly-read balance
+
+        # Sync in-memory agent object
+        agent.balance = db_balance
 
         # Get previous pivot for SL calculation
         now = datetime.now(timezone.utc)
@@ -500,6 +545,13 @@ class AgentBrokerService:
             })
             return
 
+        # Retrieve signal's stable key (time + direction) for tracking
+        sig_row = await db.execute(
+            text("SELECT time, is_bullish FROM signals WHERE id = :sid"),
+            {"sid": signal_id}
+        )
+        sig_info = sig_row.fetchone()
+
         # Create position record
         position = AgentPosition(
             agent_id=agent.id,
@@ -512,6 +564,8 @@ class AgentBrokerService:
             invested_eur=trade_amount,  # Store EUR amount invested for balance restoration
             status="OPEN",
             entry_signal_id=signal_id,
+            entry_signal_time=sig_info[0] if sig_info else None,
+            entry_signal_is_bullish=sig_info[1] if sig_info else (side == "LONG"),
         )
         db.add(position)
 
@@ -616,22 +670,57 @@ class AgentBrokerService:
         return pos
 
     async def _check_stop_loss(self, db: AsyncSession, agent: Agent,
-                               pos: AgentPosition, current_price: float) -> bool:
-        """Check if price has hit the stop loss."""
+                               pos: AgentPosition, current_price: float,
+                               candle_low: float = None, candle_high: float = None) -> bool:
+        """Check if price has hit the stop loss (using candle high/low for wick detection)."""
         triggered = False
 
-        if pos.side == "LONG" and current_price <= pos.stop_loss:
+        low = candle_low if candle_low is not None else current_price
+        high = candle_high if candle_high is not None else current_price
+
+        if pos.side == "LONG" and low <= pos.stop_loss:
             triggered = True
-        elif pos.side == "SHORT" and current_price >= pos.stop_loss:
+        elif pos.side == "SHORT" and high >= pos.stop_loss:
             triggered = True
 
         if triggered:
             logger.info(
                 f"[{agent.name}] STOP LOSS triggered for {pos.side} "
-                f"@ {current_price:.2f} (SL: {pos.stop_loss:.2f})"
+                f"@ {current_price:.2f} (SL: {pos.stop_loss:.2f}, "
+                f"Low: {low:.2f}, High: {high:.2f})"
             )
             await self._close_position_internal(
                 db, pos, exit_price=pos.stop_loss, reason="STOP_LOSS"
+            )
+            return True
+
+        return False
+
+    async def _check_take_profit(self, db: AsyncSession, agent: Agent,
+                                pos: AgentPosition, current_price: float,
+                                candle_low: float = None, candle_high: float = None) -> bool:
+        """Check if price has hit the take profit (using candle high/low for wick detection)."""
+        if pos.take_profit is None:
+            return False
+
+        triggered = False
+
+        low = candle_low if candle_low is not None else current_price
+        high = candle_high if candle_high is not None else current_price
+
+        if pos.side == "LONG" and high >= pos.take_profit:
+            triggered = True
+        elif pos.side == "SHORT" and low <= pos.take_profit:
+            triggered = True
+
+        if triggered:
+            logger.info(
+                f"[{agent.name}] TAKE PROFIT triggered for {pos.side} "
+                f"@ {current_price:.2f} (TP: {pos.take_profit:.2f}, "
+                f"Low: {low:.2f}, High: {high:.2f})"
+            )
+            await self._close_position_internal(
+                db, pos, exit_price=pos.take_profit, reason="TAKE_PROFIT"
             )
             return True
 
@@ -660,22 +749,11 @@ class AgentBrokerService:
                                    signal_id: int) -> bool:
         """Check if this signal was already used to open/close a position.
         
-        Two checks:
-        1. Direct signal_id match (same analysis run)
-        2. Signal time+direction match (guards against signal ID changes
-           after DELETE+INSERT re-analysis cycles)
+        Uses the stable signal key (time + direction) stored directly in
+        agent_positions, instead of JOINing on volatile signal IDs that
+        change after every DELETE+INSERT re-analysis cycle.
         """
-        # Check 1: exact signal_id match
-        result = await db.execute(text("""
-            SELECT COUNT(*) FROM agent_positions
-            WHERE agent_id = :agent_id
-              AND (entry_signal_id = :signal_id OR exit_signal_id = :signal_id)
-        """), {"agent_id": agent_id, "signal_id": signal_id})
-        if result.scalar() > 0:
-            return True
-
-        # Check 2: same signal time + direction already used
-        # (prevents duplicates when signal IDs change after re-analysis)
+        # Get the signal's natural key
         signal_result = await db.execute(text("""
             SELECT time, is_bullish FROM signals WHERE id = :signal_id
         """), {"signal_id": signal_id})
@@ -684,15 +762,15 @@ class AgentBrokerService:
             return False
 
         sig_time, sig_bullish = signal_row
-        side = "LONG" if sig_bullish else "SHORT"
 
+        # Check if any position for this agent was opened on the same
+        # signal (same time + same direction)
         dup_result = await db.execute(text("""
-            SELECT COUNT(*) FROM agent_positions ap
-            JOIN signals s ON s.id = ap.entry_signal_id
-            WHERE ap.agent_id = :agent_id
-              AND s.time = :sig_time
-              AND ap.side = :side
-        """), {"agent_id": agent_id, "sig_time": sig_time, "side": side})
+            SELECT COUNT(*) FROM agent_positions
+            WHERE agent_id = :agent_id
+              AND entry_signal_time = :sig_time
+              AND entry_signal_is_bullish = :sig_bullish
+        """), {"agent_id": agent_id, "sig_time": sig_time, "sig_bullish": sig_bullish})
         return dup_result.scalar() > 0
 
     async def _log(self, db: AsyncSession, agent_id: int, action: str,

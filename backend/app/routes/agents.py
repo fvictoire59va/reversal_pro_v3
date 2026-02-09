@@ -4,8 +4,11 @@ Agent Broker API routes — CRUD agents, positions, manual close.
 
 import logging
 from typing import Optional
+from datetime import datetime, timezone
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -14,6 +17,7 @@ from ..schemas import (
     AgentLogResponse, AgentsOverview,
 )
 from ..services.agent_broker import agent_broker_service
+from ..models import AgentPosition, Agent
 
 logger = logging.getLogger(__name__)
 
@@ -307,6 +311,147 @@ async def get_agent_logs(agent_id: int, limit: int = 50, db: AsyncSession = Depe
         )
         for log in logs
     ]
+
+
+# ── Performance Tree ────────────────────────────────────────
+
+@router.get("/{agent_id}/performance")
+async def get_agent_performance(agent_id: int, db: AsyncSession = Depends(get_db)):
+    """Get hierarchical performance data for the agent tree view."""
+    agent = await agent_broker_service.get_agent(db, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Get ALL positions for this agent (open + closed + stopped)
+    result = await db.execute(
+        select(AgentPosition)
+        .where(AgentPosition.agent_id == agent_id)
+        .order_by(AgentPosition.opened_at.desc())
+    )
+    positions = list(result.scalars().all())
+
+    stats = await agent_broker_service.get_agent_stats(db, agent_id)
+
+    # Helper to build stats from a list of positions
+    def compute_stats(pos_list):
+        if not pos_list:
+            return {"count": 0, "pnl": 0, "wins": 0, "losses": 0, "win_rate": 0,
+                    "avg_pnl": 0, "best": 0, "worst": 0, "avg_duration_min": 0}
+        closed = [p for p in pos_list if p.status in ("CLOSED", "STOPPED")]
+        total_pnl = sum(p.pnl or 0 for p in closed)
+        wins = [p for p in closed if (p.pnl or 0) > 0]
+        losses = [p for p in closed if (p.pnl or 0) <= 0]
+        win_rate = (len(wins) / len(closed) * 100) if closed else 0
+        avg_pnl = total_pnl / len(closed) if closed else 0
+        best = max((p.pnl or 0) for p in closed) if closed else 0
+        worst = min((p.pnl or 0) for p in closed) if closed else 0
+
+        durations = []
+        for p in closed:
+            if p.opened_at and p.closed_at:
+                dur = (p.closed_at - p.opened_at).total_seconds() / 60
+                durations.append(dur)
+        avg_dur = sum(durations) / len(durations) if durations else 0
+
+        return {
+            "count": len(pos_list),
+            "closed_count": len(closed),
+            "open_count": len([p for p in pos_list if p.status == "OPEN"]),
+            "pnl": round(total_pnl, 4),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": round(win_rate, 1),
+            "avg_pnl": round(avg_pnl, 4),
+            "best": round(best, 4),
+            "worst": round(worst, 4),
+            "avg_duration_min": round(avg_dur, 1),
+        }
+
+    def pos_to_dict(p):
+        return {
+            "id": p.id,
+            "side": p.side,
+            "entry_price": p.entry_price,
+            "exit_price": p.exit_price,
+            "pnl": round(p.pnl, 4) if p.pnl else None,
+            "pnl_percent": round(p.pnl_percent, 2) if p.pnl_percent else None,
+            "unrealized_pnl": round(p.unrealized_pnl, 4) if p.unrealized_pnl else None,
+            "status": p.status,
+            "opened_at": p.opened_at.isoformat() if p.opened_at else None,
+            "closed_at": p.closed_at.isoformat() if p.closed_at else None,
+            "quantity": p.quantity,
+            "stop_loss": p.stop_loss,
+            "take_profit": p.take_profit,
+        }
+
+    # ── Group by side ──
+    long_positions = [p for p in positions if p.side == "LONG"]
+    short_positions = [p for p in positions if p.side == "SHORT"]
+
+    # ── Group by date (Paris timezone) ──
+    by_date = defaultdict(list)
+    for p in positions:
+        if p.opened_at:
+            # Convert to Paris date string
+            paris_date = p.opened_at.strftime("%Y-%m-%d")
+            by_date[paris_date].append(p)
+
+    date_nodes = []
+    for date_str in sorted(by_date.keys(), reverse=True):
+        day_positions = by_date[date_str]
+        date_nodes.append({
+            "date": date_str,
+            "stats": compute_stats(day_positions),
+            "positions": [pos_to_dict(p) for p in day_positions],
+        })
+
+    # ── Group by status ──
+    stopped = [p for p in positions if p.status == "STOPPED"]
+    closed_ok = [p for p in positions if p.status == "CLOSED"]
+    open_pos = [p for p in positions if p.status == "OPEN"]
+
+    return {
+        "agent": {
+            "id": agent.id,
+            "name": agent.name,
+            "symbol": agent.symbol,
+            "timeframe": agent.timeframe,
+            "trade_amount": agent.trade_amount,
+            "balance": agent.balance,
+            "is_active": agent.is_active,
+            "mode": agent.mode,
+        },
+        "summary": {
+            **compute_stats(positions),
+            "total_pnl": stats["total_pnl"],
+            "unrealized_pnl": stats["total_unrealized_pnl"],
+        },
+        "by_side": {
+            "LONG": {
+                "stats": compute_stats(long_positions),
+                "positions": [pos_to_dict(p) for p in long_positions],
+            },
+            "SHORT": {
+                "stats": compute_stats(short_positions),
+                "positions": [pos_to_dict(p) for p in short_positions],
+            },
+        },
+        "by_date": date_nodes,
+        "by_status": {
+            "OPEN": {
+                "stats": compute_stats(open_pos),
+                "positions": [pos_to_dict(p) for p in open_pos],
+            },
+            "CLOSED": {
+                "stats": compute_stats(closed_ok),
+                "positions": [pos_to_dict(p) for p in closed_ok],
+            },
+            "STOPPED": {
+                "stats": compute_stats(stopped),
+                "positions": [pos_to_dict(p) for p in stopped],
+            },
+        },
+    }
 
 
 # ── Positions by Symbol/Timeframe ───────────────────────────

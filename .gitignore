@@ -34,7 +34,8 @@ output/
 data/*.csv
 !data/sample_*.csv
 
-# Docker
+# Docker / Environment
+.env
 .env.local
 
 # Node

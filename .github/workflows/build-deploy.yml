@@ -1,0 +1,114 @@
+# ============================================================================
+# GitHub Actions — Build & Push Docker images to ghcr.io
+# ============================================================================
+# Triggered on push to main branch.
+# Builds backend, frontend, and db-init images.
+# Optionally triggers Portainer webhook to redeploy the stack.
+# ============================================================================
+
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # ── Checkout ──
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Docker Buildx ──
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── Login to GitHub Container Registry ──
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Generate metadata (tags) ──
+      - name: Generate image tags
+        id: meta
+        run: |
+          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+          echo "sha_short=$SHA_SHORT" >> $GITHUB_OUTPUT
+          echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+
+      # ── Build & Push Backend ──
+      - name: Build & Push Backend
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/backend:latest
+            ${{ env.IMAGE_BASE }}/backend:${{ steps.meta.outputs.sha_short }}
+            ${{ env.IMAGE_BASE }}/backend:${{ steps.meta.outputs.date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Build & Push Frontend ──
+      - name: Build & Push Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/frontend:latest
+            ${{ env.IMAGE_BASE }}/frontend:${{ steps.meta.outputs.sha_short }}
+            ${{ env.IMAGE_BASE }}/frontend:${{ steps.meta.outputs.date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Build & Push DB Init ──
+      - name: Build & Push DB Init
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: db/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_BASE }}/db-init:latest
+            ${{ env.IMAGE_BASE }}/db-init:${{ steps.meta.outputs.sha_short }}
+            ${{ env.IMAGE_BASE }}/db-init:${{ steps.meta.outputs.date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Trigger Portainer Stack Update (webhook) ──
+      - name: Trigger Portainer redeploy
+        if: ${{ vars.PORTAINER_WEBHOOK_URL != '' }}
+        run: |
+          echo "Triggering Portainer webhook..."
+          curl -X POST "${{ vars.PORTAINER_WEBHOOK_URL }}" \
+            --fail --silent --show-error \
+            --max-time 30 || echo "⚠️ Webhook failed (stack may need manual redeploy)"
+
+      # ── Summary ──
+      - name: Deployment summary
+        run: |
+          echo "## 🚀 Images pushed to GHCR" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tags |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Backend  | \`latest\`, \`${{ steps.meta.outputs.sha_short }}\`, \`${{ steps.meta.outputs.date }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Frontend | \`latest\`, \`${{ steps.meta.outputs.sha_short }}\`, \`${{ steps.meta.outputs.date }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| DB Init  | \`latest\`, \`${{ steps.meta.outputs.sha_short }}\`, \`${{ steps.meta.outputs.date }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Portainer webhook: ${{ vars.PORTAINER_WEBHOOK_URL != '' && '✅ Triggered' || '⏭️ Skipped (no webhook configured)' }}" >> $GITHUB_STEP_SUMMARY

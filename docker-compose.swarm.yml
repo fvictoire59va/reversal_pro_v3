@@ -1,0 +1,178 @@
+# ============================================================================
+# Reversal Detection Pro v3.0 — Docker Swarm Stack (Portainer)
+# ============================================================================
+#
+# Ce fichier est conçu pour être déployé via Portainer en mode Swarm.
+# Les images sont construites et poussées sur ghcr.io via GitHub Actions.
+#
+# Déploiement :
+#   - Portainer > Stacks > Add Stack > Git Repository
+#   - Repository URL : https://github.com/fvictoire59va/reversal_pro_v3
+#   - Compose path  : docker-compose.swarm.yml
+#   - Activer "GitOps updates" pour le redéploiement automatique
+#
+# ============================================================================
+
+version: "3.8"
+
+services:
+  # ────────────────────────────────────────────────────────────
+  # TimescaleDB — Time-series database
+  # ────────────────────────────────────────────────────────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-reversal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-reversal_pro_2025}
+      POSTGRES_DB: ${POSTGRES_DB:-reversaldb}
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    networks:
+      - reversal_net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reversal -d reversaldb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ────────────────────────────────────────────────────────────
+  # Redis — Cache layer
+  # ────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - reversal_net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ────────────────────────────────────────────────────────────
+  # Backend — FastAPI (image from ghcr.io)
+  # ────────────────────────────────────────────────────────────
+  backend:
+    image: ghcr.io/fvictoire59va/reversal_pro_v3/backend:${IMAGE_TAG:-latest}
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-reversal}:${POSTGRES_PASSWORD:-reversal_pro_2025}@timescaledb:5432/${POSTGRES_DB:-reversaldb}"
+      DATABASE_URL_SYNC: "postgresql+psycopg2://${POSTGRES_USER:-reversal}:${POSTGRES_PASSWORD:-reversal_pro_2025}@timescaledb:5432/${POSTGRES_DB:-reversaldb}"
+      REDIS_URL: "redis://redis:6379/0"
+      CORS_ORIGINS: '["http://frontend:80"]'
+      DEFAULT_EXCHANGE: "binance"
+      AUTO_REFRESH_ENABLED: "true"
+      AUTO_REFRESH_INTERVAL_MINUTES: "${AUTO_REFRESH_INTERVAL_MINUTES:-5}"
+      AGENT_CYCLE_INTERVAL_MINUTES: "${AGENT_CYCLE_INTERVAL_MINUTES:-1}"
+      HYPERLIQUID_WALLET_ADDRESS: "${HYPERLIQUID_WALLET_ADDRESS:-}"
+      HYPERLIQUID_API_SECRET: "${HYPERLIQUID_API_SECRET:-}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      TELEGRAM_ENABLED: "${TELEGRAM_ENABLED:-false}"
+    networks:
+      - reversal_net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  # ────────────────────────────────────────────────────────────
+  # Frontend — Nginx + static assets (image from ghcr.io)
+  # ────────────────────────────────────────────────────────────
+  frontend:
+    image: ghcr.io/fvictoire59va/reversal_pro_v3/frontend:${IMAGE_TAG:-latest}
+    ports:
+      - "${APP_PORT:-8080}:80"
+    networks:
+      - reversal_net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  # ────────────────────────────────────────────────────────────
+  # DB Init — One-shot container for SQL migrations
+  # ────────────────────────────────────────────────────────────
+  db-init:
+    image: ghcr.io/fvictoire59va/reversal_pro_v3/db-init:${IMAGE_TAG:-latest}
+    environment:
+      PGHOST: timescaledb
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-reversal}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-reversal_pro_2025}
+      PGDATABASE: ${POSTGRES_DB:-reversaldb}
+    networks:
+      - reversal_net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+
+networks:
+  reversal_net:
+    driver: overlay
+    attachable: true
+
+volumes:
+  timescale_data:
+    driver: local
+  redis_data:
+    driver: local

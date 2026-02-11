@@ -27,6 +27,17 @@ Thumbs.db
 
 # Env
 .env
+.env.*
+!.env.example
+!.env.production.example
+
+# Git / CI
+.git/
+.github/
 
 # Output
 output/
+
+# Docs
+README.md
+*.md

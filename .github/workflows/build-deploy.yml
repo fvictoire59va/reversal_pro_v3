@@ -98,15 +98,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ── Trigger Portainer Stack Update (webhook) ──
-      - name: Trigger Portainer redeploy
-        if: ${{ vars.PORTAINER_WEBHOOK_URL != '' }}
-        run: |
-          echo "Triggering Portainer webhook..."
-          curl -X POST "${{ vars.PORTAINER_WEBHOOK_URL }}" \
-            --fail --silent --show-error \
-            --max-time 30 || echo "⚠️ Webhook failed (stack may need manual redeploy)"
-
       # ── Summary ──
       - name: Deployment summary
         run: |
@@ -118,4 +109,4 @@ jobs:
           echo "| Frontend | \`latest\`, \`${{ steps.meta.outputs.sha_short }}\`, \`${{ steps.meta.outputs.date }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| DB Init  | \`latest\`, \`${{ steps.meta.outputs.sha_short }}\`, \`${{ steps.meta.outputs.date }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Portainer webhook: ${{ vars.PORTAINER_WEBHOOK_URL != '' && '✅ Triggered' || '⏭️ Skipped (no webhook configured)' }}" >> $GITHUB_STEP_SUMMARY
+          echo "Auto-update: Shepherd will detect new images within ~5 minutes" >> $GITHUB_STEP_SUMMARY

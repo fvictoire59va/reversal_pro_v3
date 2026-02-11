@@ -101,6 +101,8 @@ services:
       - reversal_net
     deploy:
       replicas: 1
+      labels:
+        - "shepherd.auto-update=true"
       restart_policy:
         condition: on-failure
         delay: 5s
@@ -130,6 +132,8 @@ services:
       - reversal_net
     deploy:
       replicas: 1
+      labels:
+        - "shepherd.auto-update=true"
       restart_policy:
         condition: on-failure
         delay: 5s
@@ -167,6 +171,30 @@ services:
         condition: on-failure
         delay: 10s
         max_attempts: 3
+
+  # ────────────────────────────────────────────────────────────
+  # Shepherd — Auto-update Swarm services on new images (free)
+  # ────────────────────────────────────────────────────────────
+  shepherd:
+    image: mazzolino/shepherd
+    environment:
+      SLEEP_TIME: "5m"
+      FILTER_SERVICES: "label=shepherd.auto-update=true"
+      ROLLBACK_ON_FAILURE: "true"
+      IMAGE_AUTOCLEAN_LIMIT: "5"
+      VERBOSE: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - reversal_net
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 128M
 
 networks:
   reversal_net:

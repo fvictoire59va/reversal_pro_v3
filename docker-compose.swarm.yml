@@ -26,8 +26,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-reversal_pro_2025}
       POSTGRES_DB: ${POSTGRES_DB:-reversaldb}
       TIMESCALEDB_TELEMETRY: "off"
-      TS_TUNE_MAX_CONNS: "100"
-      TS_TUNE_MAX_MEMORY: "512MB"
+      NO_TS_TUNE: "true"
     volumes:
       - timescale_data:/var/lib/postgresql/data
     networks:

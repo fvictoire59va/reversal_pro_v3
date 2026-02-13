@@ -219,13 +219,7 @@ class AgentBrokerService:
             except Exception as e:
                 logger.warning(f"[{agent.name}] Analysis refresh failed: {e}")
 
-            # 2. Get latest confirmed signal
-            latest_signal = await self._get_latest_signal(db, agent.symbol, agent.timeframe)
-            if not latest_signal:
-                logger.info(f"[{agent.name}] No signals found, skipping")
-                return
-
-            # 3. Check if this signal was already processed
+            # 2. Get open positions and current price
             open_positions = await self._get_open_positions(db, agent.id)
 
             # Get current price + high/low for SL/TP checks
@@ -238,7 +232,7 @@ class AgentBrokerService:
             candle_high = candle_range["high"] if candle_range else current_price
             candle_low = candle_range["low"] if candle_range else current_price
 
-            # 4. Check stop losses and take profits on open positions
+            # 3. Check stop losses and take profits on open positions
             for pos in open_positions:
                 if await self._check_stop_loss(db, agent, pos, current_price, candle_low, candle_high):
                     continue  # Position was stopped out
@@ -251,108 +245,103 @@ class AgentBrokerService:
             open_positions = await self._get_open_positions(db, agent.id)
 
             # 5. Signal-based logic
-            signal_time = latest_signal[0]
-            is_bullish = latest_signal[1]
-            signal_price = latest_signal[2]
-            signal_id = latest_signal[3]
-            signal_bar_index = latest_signal[4]
+            #
+            # KEY DESIGN: When a position is open, the agent actively
+            # looks for the latest OPPOSITE-direction signal, not just
+            # the overall latest signal.  This prevents the scenario
+            # where a newer same-direction signal masks an intermediate
+            # opposite signal that should have closed the position.
 
-            # 5a. Check signal freshness using bar_index position in the
-            # analysis window. Confirmed signals have their time set to the
-            # PIVOT bar (the reversal extreme), which is naturally many bars
-            # before the confirmation bar. Instead of time-based staleness,
-            # we check how far the signal is from the end of the analysis.
-            analysis_run_result = await db.execute(text("""
-                SELECT bars_analyzed FROM analysis_runs
-                WHERE symbol = :symbol AND timeframe = :timeframe
-                ORDER BY created_at DESC LIMIT 1
-            """), {"symbol": agent.symbol, "timeframe": agent.timeframe})
-            analysis_run_row = analysis_run_result.fetchone()
-
-            if analysis_run_row and signal_bar_index is not None:
-                bars_analyzed = analysis_run_row[0]
-                bars_from_end = bars_analyzed - signal_bar_index
-                # Adaptive threshold based on timeframe.
-                # Confirmed signals appear at the PIVOT bar, typically 3-10
-                # bars from the end when first detected. The threshold defines
-                # how many minutes/candles we tolerate before considering
-                # the signal stale.  Typical signal-to-signal gap on 1m ≈12 bars.
-                tf_minutes = self._timeframe_to_minutes(agent.timeframe)
-                if tf_minutes <= 1:
-                    max_bars_back = 15   # 15 min window for 1m
-                elif tf_minutes <= 5:
-                    max_bars_back = 20   # ~1h40 for 5m
-                elif tf_minutes <= 15:
-                    max_bars_back = 15   # ~3h45 for 15m
-                else:
-                    max_bars_back = 10   # ~10h for 1h
-                if bars_from_end > max_bars_back:
-                    logger.info(
-                        f"[{agent.name}] Signal {signal_id} is stale "
-                        f"(bar {signal_bar_index}/{bars_analyzed}, {bars_from_end} bars from end, max {max_bars_back}), skipping"
-                    )
-                    return
-                logger.debug(
-                    f"[{agent.name}] Signal {signal_id} freshness OK "
-                    f"(bar {signal_bar_index}/{bars_analyzed}, {bars_from_end} bars from end)"
-                )
-
-            # Check if already processed this signal
-            already_processed = await self._is_signal_processed(db, agent.id, signal_id)
-            if already_processed:
-                logger.debug(f"[{agent.name}] Signal {signal_id} already processed")
-                return
-
-            # Agent uses ALL capital in one position at a time.
-            # If a position is already open, only close it on inverse signal.
             has_position = len(open_positions) > 0
 
-            if is_bullish:
-                # Bullish reversal: close SHORT if any, then open LONG
-                if has_position:
-                    short_pos = next((p for p in open_positions if p.side == "SHORT"), None)
-                    if short_pos:
-                        await self._close_position_internal(
-                            db, short_pos, exit_price=current_price,
-                            exit_signal_id=signal_id, reason="BULLISH_REVERSAL"
-                        )
-                        logger.info(f"[{agent.name}] Closed SHORT on bullish reversal")
-                    else:
-                        # Already have a LONG open — do nothing
-                        logger.debug(f"[{agent.name}] Already in LONG position, skipping")
-                        return
+            if has_position:
+                # ── Position is open: look for the latest OPPOSITE signal ──
+                current_pos = open_positions[0]
+                opposite_is_bullish = (current_pos.side == "SHORT")  # LONG→bearish, SHORT→bullish
 
-                # Open LONG with available balance
-                if agent.balance <= 0:
-                    logger.info(f"[{agent.name}] Balance is {agent.balance:.2f}, cannot open position")
-                    return
-                await self._open_position(
-                    db, agent, "LONG", current_price, signal_id
+                # Get the latest signal in the opposite direction
+                opposite_signal = await self._get_latest_signal_for_direction(
+                    db, agent.symbol, agent.timeframe, opposite_is_bullish
                 )
-                logger.info(f"[{agent.name}] Opened LONG with {agent.balance:.2f}€ on bullish reversal")
+
+                if not opposite_signal:
+                    logger.debug(f"[{agent.name}] No opposite signal found, keeping {current_pos.side}")
+                    return
+
+                opp_time, opp_bullish, opp_price, opp_id, opp_bar_index = opposite_signal
+
+                # Check staleness (relaxed for closing signals: 2x normal threshold)
+                if await self._is_signal_stale(db, agent, opp_bar_index, opp_id, lenient=True):
+                    logger.debug(f"[{agent.name}] Opposite signal {opp_id} is stale, keeping {current_pos.side}")
+                    return
+
+                # The opposite signal must be NEWER than the entry signal
+                # (so we don't close on an old opposite signal that preceded the entry)
+                entry_time = current_pos.entry_signal_time
+                if entry_time and opp_time <= entry_time:
+                    logger.debug(
+                        f"[{agent.name}] Opposite signal {opp_id} at {opp_time} "
+                        f"is older than entry at {entry_time}, ignoring"
+                    )
+                    return
+
+                # Check if already processed
+                if await self._is_signal_processed(db, agent.id, opp_id):
+                    logger.debug(f"[{agent.name}] Opposite signal {opp_id} already processed")
+                    return
+
+                # Get current price for closing/opening
+                current_price_now = await self._get_current_price(db, agent.symbol, agent.timeframe)
+                if not current_price_now:
+                    current_price_now = current_price
+
+                # Close current position on opposite reversal
+                reason = "BULLISH_REVERSAL" if opp_bullish else "BEARISH_REVERSAL"
+                await self._close_position_internal(
+                    db, current_pos, exit_price=current_price_now,
+                    exit_signal_id=opp_id, reason=reason
+                )
+                logger.info(f"[{agent.name}] Closed {current_pos.side} on {reason}")
+
+                # Open new position in opposite direction
+                new_side = "LONG" if opp_bullish else "SHORT"
+                if agent.balance <= 0:
+                    logger.info(f"[{agent.name}] Balance is {agent.balance:.2f}, cannot open {new_side}")
+                    return
+
+                await self._open_position(db, agent, new_side, current_price_now, opp_id)
+                logger.info(f"[{agent.name}] Opened {new_side} with {agent.balance:.2f}€ on {reason}")
+
             else:
-                # Bearish reversal: close LONG if any, then open SHORT
-                if has_position:
-                    long_pos = next((p for p in open_positions if p.side == "LONG"), None)
-                    if long_pos:
-                        await self._close_position_internal(
-                            db, long_pos, exit_price=current_price,
-                            exit_signal_id=signal_id, reason="BEARISH_REVERSAL"
-                        )
-                        logger.info(f"[{agent.name}] Closed LONG on bearish reversal")
-                    else:
-                        # Already have a SHORT open — do nothing
-                        logger.debug(f"[{agent.name}] Already in SHORT position, skipping")
-                        return
+                # ── No position open: use the latest signal of any direction ──
+                latest_signal = await self._get_latest_signal(db, agent.symbol, agent.timeframe)
+                if not latest_signal:
+                    logger.info(f"[{agent.name}] No signals found, skipping")
+                    return
 
-                # Open SHORT with available balance
+                signal_time = latest_signal[0]
+                is_bullish = latest_signal[1]
+                signal_price = latest_signal[2]
+                signal_id = latest_signal[3]
+                signal_bar_index = latest_signal[4]
+
+                # Staleness check (strict)
+                if await self._is_signal_stale(db, agent, signal_bar_index, signal_id, lenient=False):
+                    return
+
+                # Already processed?
+                if await self._is_signal_processed(db, agent.id, signal_id):
+                    logger.debug(f"[{agent.name}] Signal {signal_id} already processed")
+                    return
+
+                # Open new position
+                new_side = "LONG" if is_bullish else "SHORT"
                 if agent.balance <= 0:
                     logger.info(f"[{agent.name}] Balance is {agent.balance:.2f}, cannot open position")
                     return
-                await self._open_position(
-                    db, agent, "SHORT", current_price, signal_id
-                )
-                logger.info(f"[{agent.name}] Opened SHORT with {agent.balance:.2f}€ on bearish reversal")
+
+                await self._open_position(db, agent, new_side, current_price, signal_id)
+                logger.info(f"[{agent.name}] Opened {new_side} with {agent.balance:.2f}€ on {'bullish' if is_bullish else 'bearish'} reversal")
 
         except Exception as e:
             logger.error(f"[{agent.name}] Cycle error: {e}", exc_info=True)
@@ -392,6 +381,74 @@ class AgentBrokerService:
             LIMIT 1
         """), {"symbol": symbol, "timeframe": timeframe})
         return result.fetchone()
+
+    async def _get_latest_signal_for_direction(self, db: AsyncSession, symbol: str,
+                                                timeframe: str, is_bullish: bool) -> Optional[tuple]:
+        """Get the most recent confirmed signal for a specific direction (bullish/bearish)."""
+        result = await db.execute(text("""
+            SELECT time, is_bullish, price, id, bar_index
+            FROM signals
+            WHERE symbol = :symbol AND timeframe = :timeframe
+              AND is_preview = FALSE AND is_bullish = :is_bullish
+            ORDER BY time DESC
+            LIMIT 1
+        """), {"symbol": symbol, "timeframe": timeframe, "is_bullish": is_bullish})
+        return result.fetchone()
+
+    async def _is_signal_stale(self, db: AsyncSession, agent: Agent,
+                               signal_bar_index: Optional[int], signal_id: int,
+                               lenient: bool = False) -> bool:
+        """
+        Check if a signal is too far from the end of the analysis window.
+
+        The signal's bar_index refers to the PIVOT bar (the reversal extreme),
+        which is naturally several bars before the confirmation bar.
+
+        Parameters
+        ----------
+        lenient : if True, doubles the threshold. Used for closing signals
+                  where we are more tolerant of "older" pivots.
+        """
+        analysis_run_result = await db.execute(text("""
+            SELECT bars_analyzed FROM analysis_runs
+            WHERE symbol = :symbol AND timeframe = :timeframe
+            ORDER BY created_at DESC LIMIT 1
+        """), {"symbol": agent.symbol, "timeframe": agent.timeframe})
+        analysis_run_row = analysis_run_result.fetchone()
+
+        if not analysis_run_row or signal_bar_index is None:
+            return False  # Cannot determine, assume fresh
+
+        bars_analyzed = analysis_run_row[0]
+        bars_from_end = bars_analyzed - signal_bar_index
+
+        tf_minutes = self._timeframe_to_minutes(agent.timeframe)
+        if tf_minutes <= 1:
+            max_bars_back = 15    # 15 min window for 1m
+        elif tf_minutes <= 5:
+            max_bars_back = 25    # ~2h for 5m
+        elif tf_minutes <= 15:
+            max_bars_back = 20    # ~5h for 15m
+        else:
+            max_bars_back = 12    # ~12h for 1h
+
+        # Double threshold for closing signals (lenient mode)
+        if lenient:
+            max_bars_back = max_bars_back * 2
+
+        if bars_from_end > max_bars_back:
+            logger.info(
+                f"[{agent.name}] Signal {signal_id} is stale "
+                f"(bar {signal_bar_index}/{bars_analyzed}, {bars_from_end} bars from end, "
+                f"max {max_bars_back}{' lenient' if lenient else ''}), skipping"
+            )
+            return True
+
+        logger.debug(
+            f"[{agent.name}] Signal {signal_id} freshness OK "
+            f"(bar {signal_bar_index}/{bars_analyzed}, {bars_from_end} bars from end)"
+        )
+        return False
 
     async def _get_previous_pivot(self, db: AsyncSession, symbol: str,
                                   timeframe: str, is_bullish: bool,

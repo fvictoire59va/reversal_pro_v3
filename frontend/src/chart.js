@@ -498,6 +498,10 @@ export class ChartManager {
      * @param {Array} positions - Array of agent positions
      */
     showAgentPositions(positions) {
+        // Save current visible range to prevent zoom/spacing changes
+        const timeScale = this.chart.timeScale();
+        const savedRange = timeScale.getVisibleLogicalRange();
+
         // Clear existing position lines
         this.agentPositionLines.forEach(line => {
             this.candleSeries.removePriceLine(line);
@@ -515,6 +519,10 @@ export class ChartManager {
         if (!positions || positions.length === 0) {
             // Restore signal-only markers
             this.candleSeries.setMarkers([...this.signalMarkers]);
+            // Restore zoom
+            if (savedRange) {
+                timeScale.setVisibleLogicalRange(savedRange);
+            }
             return;
         }
 
@@ -643,6 +651,11 @@ export class ChartManager {
         const allMarkers = [...this.signalMarkers, ...this.agentMarkers]
             .sort((a, b) => a.time - b.time);
         this.candleSeries.setMarkers(allMarkers);
+
+        // Restore the saved zoom range to prevent spacing changes
+        if (savedRange) {
+            timeScale.setVisibleLogicalRange(savedRange);
+        }
     }
 
     destroy() {

@@ -388,9 +388,7 @@ class AnalysisService:
         ), {"s": request.symbol, "tf": request.timeframe})
 
         # 3. Re-insert with preserved or new detected_at
-        #    and collect truly new signals for Telegram notification
         now = datetime.now(timezone.utc)
-        new_signals_for_telegram = []
 
         # Compute the time of the last candle and candle interval
         # to determine which signals are actually "recent" vs "ghost" signals
@@ -412,24 +410,24 @@ class AnalysisService:
             if sig.bar_index >= len(bars_data):
                 continue
             sig_time = datetime.fromisoformat(bars_data[sig.bar_index]["time"])
+
+            # Normalize both to naive UTC for reliable comparison
+            sig_time_naive = sig_time.replace(tzinfo=None) if sig_time.tzinfo else sig_time
+
             # Reuse original detected_at if the signal was already known
-            original_detected = existing_map.get((sig_time, sig.is_bullish))
+            # Use naive comparison to avoid tz-aware vs tz-naive mismatch
+            original_detected = None
+            for (etime, ebull), edet in existing_map.items():
+                etime_naive = etime.replace(tzinfo=None) if hasattr(etime, 'tzinfo') and etime.tzinfo else etime
+                if etime_naive == sig_time_naive and ebull == sig.is_bullish:
+                    original_detected = edet
+                    break
 
             if not original_detected:
                 # Determine if this is a truly recent new signal
                 # or a ghost signal from the sliding window shifting
-                sig_time_naive = sig_time.replace(tzinfo=None) if sig_time.tzinfo else sig_time
                 cutoff_naive = recent_cutoff.replace(tzinfo=None) if recent_cutoff.tzinfo else recent_cutoff
                 if sig_time_naive >= cutoff_naive:
-                    # Truly new and recent — notify
-                    new_signals_for_telegram.append({
-                        "symbol": request.symbol,
-                        "timeframe": request.timeframe,
-                        "is_bullish": sig.is_bullish,
-                        "price": sig.price,
-                        "actual_price": sig.actual_price,
-                        "signal_time": sig_time,
-                    })
                     detected_at = now
                 else:
                     # Old signal entering window — set detected_at = signal time
@@ -456,15 +454,6 @@ class AnalysisService:
             db.add(s)
 
         await db.commit()
-
-        # Send Telegram notification for the latest new signal only
-        if new_signals_for_telegram:
-                # Keep only the most recent one
-                latest = max(new_signals_for_telegram, key=lambda s: s["signal_time"])
-                try:
-                    await telegram_service.notify_new_signal(latest)
-                except Exception as e:
-                    logger.warning(f"Failed to send Telegram signal notification: {e}")
 
     async def _persist_zones(self, db, bars_data, result, request):
         """Store supply/demand zones."""

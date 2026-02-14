@@ -78,13 +78,19 @@ async def lifespan(app: FastAPI):
                 auto_fetch, "interval",
                 minutes=settings.auto_refresh_interval_minutes,
                 id="auto_fetch",
+                max_instances=1,
+                misfire_grace_time=120,  # tolerate up to 2 min delay
+                coalesce=True,           # if multiple missed, run once
             )
 
-            # Agent cycle runs 1 minute after fetch to allow data to settle
+            # Agent cycle runs after fetch to allow data to settle
             scheduler.add_job(
                 auto_analyze_and_run_agents, "interval",
                 minutes=settings.agent_cycle_interval_minutes,
                 id="agent_cycle",
+                max_instances=1,
+                misfire_grace_time=120,
+                coalesce=True,
             )
 
             scheduler.start()

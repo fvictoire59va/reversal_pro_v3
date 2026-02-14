@@ -53,12 +53,14 @@ class DetectReversalsUseCase:
         ema_fast: int = 9,
         ema_mid: int = 14,
         ema_slow: int = 21,
+        # Timeframe for ATR scaling
+        timeframe: str = "1h",
     ):
-        # Resolve sensitivity config
+        # Resolve sensitivity config (with timeframe-adaptive ATR scaling)
         if sensitivity == SensitivityPreset.CUSTOM and custom_config:
             self.sensitivity_config = custom_config
         else:
-            self.sensitivity_config = SensitivityConfig.from_preset(sensitivity)
+            self.sensitivity_config = SensitivityConfig.from_preset(sensitivity, timeframe=timeframe)
 
         self.signal_mode = signal_mode
         self.calculation_method = calculation_method

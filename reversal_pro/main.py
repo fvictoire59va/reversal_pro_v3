@@ -186,6 +186,7 @@ def run(config: AppConfig) -> None:
         ema_fast=config.ema.superfast_length,
         ema_mid=config.ema.fast_length,
         ema_slow=config.ema.slow_length,
+        timeframe=config.data.timeframe,
     )
 
     result = use_case.execute(bars)

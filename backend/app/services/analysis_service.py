@@ -115,7 +115,7 @@ class AnalysisService:
                 volume=b["volume"],
             ))
 
-        # 3. Build and run use case
+        # 3. Build and run use case (with timeframe-adaptive ATR scaling)
         sensitivity = SensitivityPreset(request.sensitivity)
         custom_config = None
         if sensitivity == SensitivityPreset.CUSTOM:
@@ -130,6 +130,7 @@ class AnalysisService:
             average_length=request.average_length,
             confirmation_bars=request.confirmation_bars,
             generate_zones=request.show_zones,
+            timeframe=request.timeframe,
         )
 
         result = use_case.execute(core_bars)
@@ -390,6 +391,23 @@ class AnalysisService:
         #    and collect truly new signals for Telegram notification
         now = datetime.now(timezone.utc)
         new_signals_for_telegram = []
+
+        # Compute the time of the last candle and candle interval
+        # to determine which signals are actually "recent" vs "ghost" signals
+        # that appeared because the sliding window shifted.
+        last_bar_time = datetime.fromisoformat(bars_data[-1]["time"])
+        if len(bars_data) >= 2:
+            candle_seconds = (
+                datetime.fromisoformat(bars_data[-1]["time"])
+                - datetime.fromisoformat(bars_data[-2]["time"])
+            ).total_seconds()
+        else:
+            candle_seconds = 60
+        # A signal is only considered "truly new" if it occurred within
+        # the last 10 candles. Older signals entering the window are
+        # stored with detected_at = signal_time (they are historical).
+        recent_cutoff = last_bar_time - timedelta(seconds=candle_seconds * 10)
+
         for sig in result.signals:
             if sig.bar_index >= len(bars_data):
                 continue
@@ -398,15 +416,30 @@ class AnalysisService:
             original_detected = existing_map.get((sig_time, sig.is_bullish))
 
             if not original_detected:
-                # This is a truly new signal
-                new_signals_for_telegram.append({
-                    "symbol": request.symbol,
-                    "timeframe": request.timeframe,
-                    "is_bullish": sig.is_bullish,
-                    "price": sig.price,
-                    "actual_price": sig.actual_price,
-                    "signal_time": sig_time,
-                })
+                # Determine if this is a truly recent new signal
+                # or a ghost signal from the sliding window shifting
+                sig_time_naive = sig_time.replace(tzinfo=None) if sig_time.tzinfo else sig_time
+                cutoff_naive = recent_cutoff.replace(tzinfo=None) if recent_cutoff.tzinfo else recent_cutoff
+                if sig_time_naive >= cutoff_naive:
+                    # Truly new and recent — notify
+                    new_signals_for_telegram.append({
+                        "symbol": request.symbol,
+                        "timeframe": request.timeframe,
+                        "is_bullish": sig.is_bullish,
+                        "price": sig.price,
+                        "actual_price": sig.actual_price,
+                        "signal_time": sig_time,
+                    })
+                    detected_at = now
+                else:
+                    # Old signal entering window — set detected_at = signal time
+                    detected_at = sig_time
+                    logger.debug(
+                        f"Ghost signal ignored: {sig_time} {'LONG' if sig.is_bullish else 'SHORT'} "
+                        f"(older than cutoff {cutoff_naive})"
+                    )
+            else:
+                detected_at = original_detected
 
             s = Signal(
                 time=sig_time,
@@ -418,7 +451,7 @@ class AnalysisService:
                 is_bullish=sig.is_bullish,
                 is_preview=sig.is_preview,
                 signal_label=sig.label,
-                detected_at=original_detected if original_detected else now,
+                detected_at=detected_at,
             )
             db.add(s)
 
@@ -426,20 +459,6 @@ class AnalysisService:
 
         # Send Telegram notification for the latest new signal only
         if new_signals_for_telegram:
-            # Filter: only recent signals (within last 3 candles)
-            if len(bars_data) >= 2:
-                t1 = datetime.fromisoformat(bars_data[-1]["time"])
-                t0 = datetime.fromisoformat(bars_data[-2]["time"])
-                candle_interval = (t1 - t0).total_seconds()
-                recent_threshold = t1 - timedelta(
-                    seconds=candle_interval * 3
-                )
-                new_signals_for_telegram = [
-                    s for s in new_signals_for_telegram
-                    if s["signal_time"].replace(tzinfo=None) >= recent_threshold.replace(tzinfo=None)
-                ]
-
-            if new_signals_for_telegram:
                 # Keep only the most recent one
                 latest = max(new_signals_for_telegram, key=lambda s: s["signal_time"])
                 try:

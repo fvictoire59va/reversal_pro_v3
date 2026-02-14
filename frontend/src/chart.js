@@ -228,6 +228,11 @@ export class ChartManager {
             shiftedCandles = data.candles.map(shiftTime);
             this.candleSeries.setData(shiftedCandles);
             this.lastCandleTime = shiftedCandles[shiftedCandles.length - 1].time;
+            // Store candle timestamps and interval for zone alignment
+            this.candleTimes = new Set(shiftedCandles.map(c => c.time));
+            if (shiftedCandles.length >= 2) {
+                this.candleInterval = shiftedCandles[1].time - shiftedCandles[0].time;
+            }
         }
 
         // Volume (derive from candles — API could add volumes later)
@@ -589,13 +594,21 @@ export class ChartManager {
                 if (this.lastCandleTime && pos.take_profit && pos.stop_loss) {
                     const zoneStart = entryMarker.time;
                     const zoneEnd = this.lastCandleTime;
-                    const zoneData = [{ time: zoneStart, value: pos.entry_price }];
-                    // Add intermediate points every ~50 candles for smooth rendering
-                    const step = Math.max(60, Math.floor((zoneEnd - zoneStart) / 50));
-                    for (let t = zoneStart + step; t < zoneEnd; t += step) {
-                        zoneData.push({ time: t, value: pos.entry_price });
+                    // Use only candle-aligned timestamps to avoid creating extra
+                    // data points that change the time axis spacing
+                    const zoneData = [];
+                    if (this.candleTimes) {
+                        for (const t of this.candleTimes) {
+                            if (t >= zoneStart && t <= zoneEnd) {
+                                zoneData.push({ time: t, value: pos.entry_price });
+                            }
+                        }
+                        zoneData.sort((a, b) => a.time - b.time);
                     }
-                    zoneData.push({ time: zoneEnd, value: pos.entry_price });
+                    if (zoneData.length === 0) {
+                        zoneData.push({ time: zoneStart, value: pos.entry_price });
+                        zoneData.push({ time: zoneEnd, value: pos.entry_price });
+                    }
 
                     // TP zone (green) — baseline series with fill between entry and TP
                     const tpZone = this.chart.addBaselineSeries({

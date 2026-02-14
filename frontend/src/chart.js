@@ -646,17 +646,49 @@ export class ChartManager {
                 }
             }
 
-            // For closed positions, show exit line
-            if (isClosed && pos.exit_price) {
-                const exitLine = this.candleSeries.createPriceLine({
-                    price: pos.exit_price,
-                    color: pos.pnl > 0 ? '#00aa5566' : '#dd334466',
-                    lineWidth: 1,
-                    lineStyle: LineStyle.Dotted,
-                    axisLabelVisible: false,
-                    title: '',
-                });
-                this.agentPositionLines.push(exitLine);
+            // For closed/stopped positions, show exit line + entry/exit markers
+            if (isClosed) {
+                if (pos.exit_price) {
+                    const exitLine = this.candleSeries.createPriceLine({
+                        price: pos.exit_price,
+                        color: pos.pnl > 0 ? '#00aa5566' : '#dd334466',
+                        lineWidth: 1,
+                        lineStyle: LineStyle.Dotted,
+                        axisLabelVisible: false,
+                        title: '',
+                    });
+                    this.agentPositionLines.push(exitLine);
+                }
+
+                // Entry marker for closed position (diamond shape, muted color)
+                if (pos.opened_at) {
+                    const entryTs = utcToParisTimestamp(Math.floor(new Date(pos.opened_at).getTime() / 1000));
+                    const pnlSign = pos.pnl > 0 ? '+' : '';
+                    this.agentMarkers.push({
+                        time: entryTs,
+                        position: isLong ? 'belowBar' : 'aboveBar',
+                        color: isLong ? '#0088dd88' : '#dd880088',
+                        shape: isLong ? 'arrowUp' : 'arrowDown',
+                        text: `${pos.agent_name}`,
+                        size: 0,
+                    });
+                }
+
+                // Exit marker for closed position (cross shape showing result)
+                if (pos.closed_at) {
+                    const exitTs = utcToParisTimestamp(Math.floor(new Date(pos.closed_at).getTime() / 1000));
+                    const isStopped = pos.status === 'STOPPED';
+                    const isWin = pos.pnl > 0;
+                    const pnlStr = pos.pnl != null ? (pos.pnl > 0 ? '+' : '') + pos.pnl.toFixed(2) : '';
+                    this.agentMarkers.push({
+                        time: exitTs,
+                        position: isLong ? 'aboveBar' : 'belowBar',
+                        color: isWin ? '#00aa55' : '#dd3344',
+                        shape: 'circle',
+                        text: `${isStopped ? 'SL' : 'TP'} ${pnlStr}`,
+                        size: 0,
+                    });
+                }
             }
         });
 

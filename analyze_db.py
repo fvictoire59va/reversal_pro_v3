@@ -90,9 +90,36 @@ print("=" * 60)
 try:
     r = requests.get(f"{API}/api/watchlist/", timeout=10)
     if r.status_code == 200:
-        for item in r.json():
-            print(f"  {item.get('symbol')} | {item.get('timeframe')} | {item.get('exchange')} | active={item.get('is_active')}")
+        data = r.json()
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    print(f"  {item.get('symbol')} | {item.get('timeframe')} | {item.get('exchange')} | active={item.get('is_active')}")
+                else:
+                    print(f"  {item}")
+        else:
+            print(f"  Response: {data}")
     else:
-        print(f"  Error: {r.status_code}")
+        print(f"  Error: {r.status_code} — {r.text[:200]}")
 except Exception as e:
     print(f"  Error: {e}")
+
+# 4. Check OHLCV data availability per timeframe
+print("\n" + "=" * 60)
+print("OHLCV DATA PER TIMEFRAME")
+print("=" * 60)
+for tf in ['1m', '5m', '15m', '1h', '4h', '1d']:
+    try:
+        r = requests.get(f"{API}/api/analysis/chart/BTC-USDT/{tf}", params={
+            "limit": 10,
+            "sensitivity": "Medium",
+            "signal_mode": "Confirmed Only",
+        }, timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            n = len(data.get('candles', []))
+            print(f"  {tf}: {n} candles available")
+        else:
+            print(f"  {tf}: Error {r.status_code} — {r.text[:100]}")
+    except Exception as e:
+        print(f"  {tf}: Error — {e}")

@@ -303,6 +303,26 @@ class AgentBrokerService:
                 )
                 logger.info(f"[{agent.name}] Closed {current_pos.side} on {reason}")
 
+                # ── Cooldown: check minimum time between close and re-open ──
+                # Avoids whipsaw when reversals flip-flop too fast
+                min_gap_bars = 3
+                tf_seconds = TIMEFRAME_SECONDS.get(agent.timeframe, 60)
+                min_gap_seconds = min_gap_bars * tf_seconds
+                if current_pos.opened_at:
+                    position_duration = (datetime.now(timezone.utc) - current_pos.opened_at).total_seconds()
+                    if position_duration < min_gap_seconds:
+                        logger.info(
+                            f"[{agent.name}] Position lasted only {position_duration:.0f}s "
+                            f"(< {min_gap_seconds}s = {min_gap_bars} bars), "
+                            f"skipping immediate re-open to avoid whipsaw"
+                        )
+                        await self._log(db, agent.id, "REOPEN_SKIPPED", {
+                            "reason": "whipsaw_cooldown",
+                            "position_duration_s": round(position_duration),
+                            "min_gap_s": min_gap_seconds,
+                        })
+                        return
+
                 # Open new position in opposite direction
                 new_side = "LONG" if opp_bullish else "SHORT"
                 if agent.balance <= 0:
@@ -541,6 +561,39 @@ class AgentBrokerService:
 
         return round(sl, 2), round(tp, 2)
 
+    def _is_risk_too_small(self, agent_name: str, side: str, entry_price: float,
+                           sl: float, timeframe: str) -> bool:
+        """
+        Reject the trade if the risk (distance entry→SL) is too small
+        relative to the entry price.  When two opposite reversals are
+        very close in price the SL sits right next to the entry, making
+        a profitable trade virtually impossible.
+
+        Minimum risk thresholds (% of entry price):
+          1m–5m  : 0.15%
+          15m    : 0.25%
+          1h+    : 0.40%
+        """
+        risk = abs(entry_price - sl)
+        risk_pct = (risk / entry_price) * 100 if entry_price > 0 else 0
+
+        tf_minutes = self._timeframe_to_minutes(timeframe)
+        if tf_minutes <= 5:
+            min_risk_pct = 0.15
+        elif tf_minutes <= 15:
+            min_risk_pct = 0.25
+        else:
+            min_risk_pct = 0.40
+
+        if risk_pct < min_risk_pct:
+            logger.info(
+                f"[{agent_name}] SKIPPING {side}: risk too small "
+                f"({risk_pct:.3f}% < {min_risk_pct}% min). "
+                f"Entry={entry_price:.2f}, SL={sl:.2f}, gap={risk:.2f}"
+            )
+            return True
+        return False
+
     async def _get_available_capital(self, db: AsyncSession, agent: Agent) -> float:
         """Return agent's current balance."""
         return agent.balance
@@ -584,6 +637,19 @@ class AgentBrokerService:
         atr = await self._get_current_atr(db, agent.symbol, agent.timeframe)
 
         sl, tp = self._calculate_sl_tp(side, current_price, pivot_price, atr)
+
+        # ── Minimum risk filter ──
+        # Skip trades where the SL is too close to entry (opposite reversals
+        # too close in price → impossible to profit)
+        if self._is_risk_too_small(f"agent_{agent.id}", side, current_price, sl, agent.timeframe):
+            await self._log(db, agent.id, "TRADE_SKIPPED", {
+                "side": side,
+                "reason": "risk_too_small",
+                "entry_price": current_price,
+                "stop_loss": sl,
+                "risk_pct": round(abs(current_price - sl) / current_price * 100, 4),
+            })
+            return
 
         # Execute order
         order_result = await hyperliquid_client.market_open(

@@ -580,13 +580,14 @@ export class ChartManager {
                 this.agentPositionLines.push(slLine);
 
                 // Add markers for entry (apply Paris timezone shift like candle data)
+                const entryRawTime = utcToParisTimestamp(Math.floor(new Date(pos.opened_at).getTime() / 1000));
                 const entryMarker = {
-                    time: utcToParisTimestamp(Math.floor(new Date(pos.opened_at).getTime() / 1000)),
+                    time: this._snapToCandleTime(entryRawTime),
                     position: isLong ? 'belowBar' : 'aboveBar',
                     color: isLong ? '#0088dd' : '#dd8800',
                     shape: isLong ? 'arrowUp' : 'arrowDown',
                     text: pos.agent_name,
-                    size: 1,
+                    size: 2,
                 };
                 this.agentMarkers.push(entryMarker);
 
@@ -660,23 +661,26 @@ export class ChartManager {
                     this.agentPositionLines.push(exitLine);
                 }
 
-                // Entry marker for closed position (diamond shape, muted color)
+                // Entry marker for closed position (muted color)
                 if (pos.opened_at) {
-                    const entryTs = utcToParisTimestamp(Math.floor(new Date(pos.opened_at).getTime() / 1000));
-                    const pnlSign = pos.pnl > 0 ? '+' : '';
+                    const entryTs = this._snapToCandleTime(
+                        utcToParisTimestamp(Math.floor(new Date(pos.opened_at).getTime() / 1000))
+                    );
                     this.agentMarkers.push({
                         time: entryTs,
                         position: isLong ? 'belowBar' : 'aboveBar',
                         color: isLong ? '#0088dd88' : '#dd880088',
                         shape: isLong ? 'arrowUp' : 'arrowDown',
                         text: `${pos.agent_name}`,
-                        size: 0,
+                        size: 1,
                     });
                 }
 
-                // Exit marker for closed position (cross shape showing result)
+                // Exit marker for closed position (circle showing result)
                 if (pos.closed_at) {
-                    const exitTs = utcToParisTimestamp(Math.floor(new Date(pos.closed_at).getTime() / 1000));
+                    const exitTs = this._snapToCandleTime(
+                        utcToParisTimestamp(Math.floor(new Date(pos.closed_at).getTime() / 1000))
+                    );
                     const isStopped = pos.status === 'STOPPED';
                     const isWin = pos.pnl > 0;
                     const pnlStr = pos.pnl != null ? (pos.pnl > 0 ? '+' : '') + pos.pnl.toFixed(2) : '';
@@ -686,7 +690,7 @@ export class ChartManager {
                         color: isWin ? '#00aa55' : '#dd3344',
                         shape: 'circle',
                         text: `${isStopped ? 'SL' : 'TP'} ${pnlStr}`,
-                        size: 0,
+                        size: 1,
                     });
                 }
             }
@@ -701,6 +705,24 @@ export class ChartManager {
         if (savedRange) {
             timeScale.setVisibleLogicalRange(savedRange);
         }
+    }
+
+    /**
+     * Snap a timestamp to the nearest existing candle time.
+     * Markers MUST match a candle time to be rendered by lightweight-charts.
+     */
+    _snapToCandleTime(timestamp) {
+        if (!this.candleTimes || this.candleTimes.size === 0) return timestamp;
+        let closest = null;
+        let minDiff = Infinity;
+        for (const t of this.candleTimes) {
+            const diff = Math.abs(t - timestamp);
+            if (diff < minDiff) {
+                minDiff = diff;
+                closest = t;
+            }
+        }
+        return closest !== null ? closest : timestamp;
     }
 
     destroy() {

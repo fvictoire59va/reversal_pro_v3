@@ -594,6 +594,63 @@ class AgentBrokerService:
             return True
         return False
 
+    async def _is_pivot_momentum_against(self, db: AsyncSession, agent_name: str,
+                                         symbol: str, timeframe: str,
+                                         side: str) -> bool:
+        """
+        Check if the last 3 pivots signal momentum AGAINST the intended trade.
+
+        ── LONG filter ──
+        Query the last 3 BEARISH reversals (swing highs).
+        If each successive high is LOWER than the previous one (lower highs),
+        the market is in a downtrend → skip the LONG.
+
+        ── SHORT filter ──
+        Query the last 3 BULLISH reversals (swing lows).
+        If each successive low is HIGHER than the previous one (higher lows),
+        the market is in an uptrend → skip the SHORT.
+        """
+        # For LONG: check bearish pivots (highs) for lower-highs
+        # For SHORT: check bullish pivots (lows) for higher-lows
+        check_bullish = (side == "SHORT")  # if SHORT, look at bullish pivots
+
+        result = await db.execute(text("""
+            SELECT price FROM signals
+            WHERE symbol = :symbol AND timeframe = :timeframe
+              AND is_preview = FALSE AND is_bullish = :is_bullish
+            ORDER BY time DESC
+            LIMIT 3
+        """), {"symbol": symbol, "timeframe": timeframe, "is_bullish": check_bullish})
+        rows = result.fetchall()
+
+        if len(rows) < 3:
+            return False  # Not enough data to decide
+
+        # rows are ordered DESC (newest first): [newest, middle, oldest]
+        prices = [r[0] for r in rows]
+        p_newest, p_middle, p_oldest = prices[0], prices[1], prices[2]
+
+        if side == "LONG":
+            # Bearish pivots = swing highs
+            # Lower highs → downtrend → skip LONG
+            if p_newest < p_middle < p_oldest:
+                logger.info(
+                    f"[{agent_name}] SKIPPING LONG: 3 consecutive lower highs "
+                    f"({p_oldest:.2f} > {p_middle:.2f} > {p_newest:.2f}) → downtrend"
+                )
+                return True
+        else:  # SHORT
+            # Bullish pivots = swing lows
+            # Higher lows → uptrend → skip SHORT
+            if p_newest > p_middle > p_oldest:
+                logger.info(
+                    f"[{agent_name}] SKIPPING SHORT: 3 consecutive higher lows "
+                    f"({p_oldest:.2f} < {p_middle:.2f} < {p_newest:.2f}) → uptrend"
+                )
+                return True
+
+        return False
+
     async def _get_available_capital(self, db: AsyncSession, agent: Agent) -> float:
         """Return agent's current balance."""
         return agent.balance
@@ -648,6 +705,18 @@ class AgentBrokerService:
                 "entry_price": current_price,
                 "stop_loss": sl,
                 "risk_pct": round(abs(current_price - sl) / current_price * 100, 4),
+            })
+            return
+
+        # ── Pivot momentum filter ──
+        # Lower highs → skip LONG (downtrend)
+        # Higher lows → skip SHORT (uptrend)
+        if await self._is_pivot_momentum_against(db, f"agent_{agent.id}",
+                                                  agent.symbol, agent.timeframe, side):
+            await self._log(db, agent.id, "TRADE_SKIPPED", {
+                "side": side,
+                "reason": "pivot_momentum_against",
+                "entry_price": current_price,
             })
             return
 

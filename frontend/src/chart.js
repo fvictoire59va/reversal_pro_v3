@@ -684,12 +684,14 @@ export class ChartManager {
                     const isStopped = pos.status === 'STOPPED';
                     const isWin = pos.pnl > 0;
                     const pnlStr = pos.pnl != null ? (pos.pnl > 0 ? '+' : '') + pos.pnl.toFixed(2) : '';
+                    // Label: SL if stopped, TP if profitable close, EXIT if closed at a loss
+                    const exitLabel = isStopped ? 'SL' : (isWin ? 'TP' : 'EXIT');
                     this.agentMarkers.push({
                         time: exitTs,
                         position: isLong ? 'aboveBar' : 'belowBar',
                         color: isWin ? '#00aa55' : '#dd3344',
                         shape: 'circle',
-                        text: `${isStopped ? 'SL' : 'TP'} ${pnlStr}`,
+                        text: `${exitLabel} ${pnlStr}`,
                         size: 1,
                     });
                 }

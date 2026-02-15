@@ -33,13 +33,13 @@ TIMEFRAME_SECONDS = {
     "1h": 3600, "4h": 14400, "1d": 86400,
 }
 
-# Higher-timeframe map: for each TF, which HTFs to check for trend confirmation
-# We check up to 2 levels above for fast TFs, 1 level for slower ones
+# Higher-timeframe map: for each TF, which HTF to check for trend confirmation
+# Only 1 level above to keep it simple and avoid over-filtering
 HTF_MAP = {
-    "1m":  ["5m", "15m"],
-    "5m":  ["15m", "1h"],
-    "15m": ["1h", "4h"],
-    "30m": ["1h", "4h"],
+    "1m":  ["5m"],
+    "5m":  ["15m"],
+    "15m": ["1h"],
+    "30m": ["1h"],
     "1h":  ["4h"],
     "4h":  ["1d"],
     "1d":  [],           # No higher TF to check

@@ -691,54 +691,93 @@ class AgentBrokerService:
                                      symbol: str, timeframe: str,
                                      side: str) -> bool:
         """
-        Check higher-timeframe pivot trends to confirm the trade direction.
+        Require the higher-timeframe trend to CONFIRM the trade direction.
 
-        For each HTF above the agent's TF, query the last 3 pivots and
-        apply the same lower-highs / higher-lows logic.
+        - LONG  → HTF must show higher lows (bullish pivots ascending)
+        - SHORT → HTF must show lower highs (bearish pivots descending)
 
-        The trade is blocked if ANY higher TF shows momentum against.
-        This ensures we trade WITH the bigger-picture trend, not against it.
+        The trade is blocked if:
+        1. HTF trend is explicitly against (opposite momentum), OR
+        2. HTF trend is NOT confirmed in the right direction (neutral/unclear)
+
+        This means we only trade WITH the bigger-picture trend.
         """
         htf_list = HTF_MAP.get(timeframe, [])
         if not htf_list:
-            return False
-
-        check_bullish = (side == "SHORT")
+            return False  # No HTF to check (e.g. 1d), allow trade
 
         for htf in htf_list:
-            result = await db.execute(text("""
-                SELECT price FROM signals
-                WHERE symbol = :symbol AND timeframe = :timeframe
-                  AND is_preview = FALSE AND is_bullish = :is_bullish
-                ORDER BY time DESC
-                LIMIT 3
-            """), {"symbol": symbol, "timeframe": htf, "is_bullish": check_bullish})
-            rows = result.fetchall()
-
-            if len(rows) < 3:
-                continue  # Not enough HTF data, skip this level
-
-            prices = [r[0] for r in rows]
-            p_newest, p_middle, p_oldest = prices[0], prices[1], prices[2]
-
             if side == "LONG":
-                # HTF bearish pivots (highs) making lower highs → HTF downtrend
-                if p_newest < p_middle < p_oldest:
+                # For LONG: we need HTF bullish pivots (lows) making higher lows
+                result = await db.execute(text("""
+                    SELECT price FROM signals
+                    WHERE symbol = :symbol AND timeframe = :timeframe
+                      AND is_preview = FALSE AND is_bullish = TRUE
+                    ORDER BY time DESC
+                    LIMIT 3
+                """), {"symbol": symbol, "timeframe": htf})
+                rows = result.fetchall()
+
+                if len(rows) < 3:
                     logger.info(
-                        f"[{agent_name}] SKIPPING LONG: HTF {htf} shows lower highs "
-                        f"({p_oldest:.2f} > {p_middle:.2f} > {p_newest:.2f}) → HTF downtrend"
+                        f"[{agent_name}] SKIPPING LONG: not enough HTF {htf} "
+                        f"bullish pivots to confirm uptrend ({len(rows)}/3)"
                     )
-                    return True
-            else:  # SHORT
-                # HTF bullish pivots (lows) making higher lows → HTF uptrend
+                    return True  # No confirmation → block
+
+                prices = [r[0] for r in rows]
+                p_newest, p_middle, p_oldest = prices[0], prices[1], prices[2]
+
+                # Require higher lows (ascending bullish pivots)
                 if p_newest > p_middle > p_oldest:
                     logger.info(
-                        f"[{agent_name}] SKIPPING SHORT: HTF {htf} shows higher lows "
-                        f"({p_oldest:.2f} < {p_middle:.2f} < {p_newest:.2f}) → HTF uptrend"
+                        f"[{agent_name}] LONG confirmed: HTF {htf} higher lows "
+                        f"({p_oldest:.2f} < {p_middle:.2f} < {p_newest:.2f}) → HTF uptrend ✓"
                     )
-                    return True
+                    # HTF confirms → allow
+                else:
+                    logger.info(
+                        f"[{agent_name}] SKIPPING LONG: HTF {htf} NOT showing higher lows "
+                        f"({p_oldest:.2f}, {p_middle:.2f}, {p_newest:.2f}) → no HTF uptrend"
+                    )
+                    return True  # Not confirmed → block
 
-        return False
+            else:  # SHORT
+                # For SHORT: we need HTF bearish pivots (highs) making lower highs
+                result = await db.execute(text("""
+                    SELECT price FROM signals
+                    WHERE symbol = :symbol AND timeframe = :timeframe
+                      AND is_preview = FALSE AND is_bullish = FALSE
+                    ORDER BY time DESC
+                    LIMIT 3
+                """), {"symbol": symbol, "timeframe": htf})
+                rows = result.fetchall()
+
+                if len(rows) < 3:
+                    logger.info(
+                        f"[{agent_name}] SKIPPING SHORT: not enough HTF {htf} "
+                        f"bearish pivots to confirm downtrend ({len(rows)}/3)"
+                    )
+                    return True  # No confirmation → block
+
+                prices = [r[0] for r in rows]
+                p_newest, p_middle, p_oldest = prices[0], prices[1], prices[2]
+
+                # Require lower highs (descending bearish pivots)
+                if p_newest < p_middle < p_oldest:
+                    logger.info(
+                        f"[{agent_name}] SHORT confirmed: HTF {htf} lower highs "
+                        f"({p_oldest:.2f} > {p_middle:.2f} > {p_newest:.2f}) → HTF downtrend ✓"
+                    )
+                    # HTF confirms → allow
+                else:
+                    logger.info(
+                        f"[{agent_name}] SKIPPING SHORT: HTF {htf} NOT showing lower highs "
+                        f"({p_oldest:.2f}, {p_middle:.2f}, {p_newest:.2f}) → no HTF downtrend"
+                    )
+                    return True  # Not confirmed → block
+
+        return False  # All HTFs confirmed → allow trade
 
     async def _get_available_capital(self, db: AsyncSession, agent: Agent) -> float:
         """Return agent's current balance."""

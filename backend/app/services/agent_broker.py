@@ -6,7 +6,7 @@ Each agent:
   1. Polls signals from DB at its configured timeframe interval
   2. Opens LONG on bullish reversal, closes on bearish reversal
   3. Opens SHORT on bearish reversal, closes on bullish reversal
-  4. Calculates SL from previous pivot, TP with R:R = 3:1
+  4. Calculates SL from previous pivot, TP with TF-adaptive R:R (1.5–3:1)
   5. Works in paper (simulation) or live mode
 """
 
@@ -564,36 +564,81 @@ class AgentBrokerService:
         row = result.fetchone()
         return row[0] if row else None
 
+    # ── Timeframe-adaptive parameters ──────────────────────
+    # Smaller TFs → confirmation arrives late, so reduce TP target
+    # and keep SL tighter for realistic risk/reward.
+    TF_PARAMS = {
+        # tf_minutes: (R:R ratio, ATR mult for SL fallback, max SL %, fallback SL %)
+        1:    (1.5, 1.0, 0.30, 0.50),   # 1m  — fast scalp
+        5:    (2.0, 1.2, 0.50, 0.80),   # 5m  — quick swing
+        15:   (2.5, 1.3, 0.80, 1.20),   # 15m — intraday
+        60:   (3.0, 1.5, 1.50, 2.00),   # 1h  — swing
+        240:  (3.0, 1.5, 3.00, 3.00),   # 4h  — position
+        1440: (3.0, 1.5, 5.00, 5.00),   # 1d  — long-term
+    }
+
+    def _get_tf_params(self, timeframe: str) -> tuple:
+        """Return (rr_ratio, atr_mult, max_sl_pct, fallback_sl_pct) for a TF."""
+        tf_min = self._timeframe_to_minutes(timeframe)
+        # Find the closest matching TF bucket (<=)
+        best = (3.0, 1.5, 5.0, 5.0)
+        for minutes in sorted(self.TF_PARAMS.keys()):
+            if tf_min <= minutes:
+                best = self.TF_PARAMS[minutes]
+                break
+        else:
+            best = self.TF_PARAMS[1440]  # largest bucket
+        return best
+
     def _calculate_sl_tp(self, side: str, entry_price: float,
-                         pivot_price: Optional[float], atr: Optional[float]) -> tuple:
+                         pivot_price: Optional[float], atr: Optional[float],
+                         timeframe: str = "1h") -> tuple:
         """
-        Calculate Stop Loss and Take Profit for R:R = 3:1.
-        
-        LONG:  SL = previous bearish pivot (or entry - 1.5*ATR fallback)
-               TP = entry + 3 * (entry - SL)
-        SHORT: SL = previous bullish pivot (or entry + 1.5*ATR fallback)
-               TP = entry - 3 * (SL - entry)
+        Calculate Stop Loss and Take Profit with timeframe-adaptive R:R.
+
+        Smaller TFs get tighter SL and lower TP targets because confirmation
+        signals arrive after the move has already started, reducing remaining
+        profit potential.
+
+        Parameters per TF (see TF_PARAMS):
+          1m  → R:R 1.5:1, ATR×1.0, max SL 0.30%
+          5m  → R:R 2.0:1, ATR×1.2, max SL 0.50%
+          15m → R:R 2.5:1, ATR×1.3, max SL 0.80%
+          1h  → R:R 3.0:1, ATR×1.5, max SL 1.50%
+          4h+ → R:R 3.0:1, ATR×1.5, max SL 3.00%
         """
+        rr_ratio, atr_mult, max_sl_pct, fallback_sl_pct = self._get_tf_params(timeframe)
+
         if side == "LONG":
             if pivot_price and pivot_price < entry_price:
                 sl = pivot_price
             elif atr:
-                sl = entry_price - (1.5 * atr)
+                sl = entry_price - (atr_mult * atr)
             else:
-                sl = entry_price * 0.98  # 2% fallback
+                sl = entry_price * (1 - fallback_sl_pct / 100)
+
+            # Cap SL distance to max_sl_pct of entry price
+            max_sl_dist = entry_price * (max_sl_pct / 100)
+            if (entry_price - sl) > max_sl_dist:
+                sl = entry_price - max_sl_dist
 
             risk = entry_price - sl
-            tp = entry_price + (3.0 * risk)
+            tp = entry_price + (rr_ratio * risk)
         else:  # SHORT
             if pivot_price and pivot_price > entry_price:
                 sl = pivot_price
             elif atr:
-                sl = entry_price + (1.5 * atr)
+                sl = entry_price + (atr_mult * atr)
             else:
-                sl = entry_price * 1.02  # 2% fallback
+                sl = entry_price * (1 + fallback_sl_pct / 100)
+
+            # Cap SL distance to max_sl_pct of entry price
+            max_sl_dist = entry_price * (max_sl_pct / 100)
+            if (sl - entry_price) > max_sl_dist:
+                sl = entry_price + max_sl_dist
 
             risk = sl - entry_price
-            tp = entry_price - (3.0 * risk)
+            tp = entry_price - (rr_ratio * risk)
 
         return round(sl, 2), round(tp, 2)
 
@@ -821,7 +866,7 @@ class AgentBrokerService:
         )
         atr = await self._get_current_atr(db, agent.symbol, agent.timeframe)
 
-        sl, tp = self._calculate_sl_tp(side, current_price, pivot_price, atr)
+        sl, tp = self._calculate_sl_tp(side, current_price, pivot_price, atr, agent.timeframe)
 
         # ── Minimum risk filter ──
         # Skip trades where the SL is too close to entry (opposite reversals

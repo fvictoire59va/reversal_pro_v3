@@ -154,6 +154,10 @@ class ZigZagService:
 
         zhigh = None
         zlow = None
+        zhigh_actual = None
+        zlow_actual = None
+        zhigh_bar = 0
+        zlow_bar = 0
         direction = 0
         previews: List[Pivot] = []
 
@@ -170,35 +174,47 @@ class ZigZagService:
             if zhigh is None:
                 zhigh = ph
                 zlow = pl
+                zhigh_actual = highs[i]
+                zlow_actual = lows[i]
+                zhigh_bar = i
+                zlow_bar = i
                 direction = 1
                 continue
 
             if direction == 1:
                 if ph > zhigh:
                     zhigh = ph
+                    zhigh_actual = highs[i]
+                    zhigh_bar = i
                 if zhigh - pl >= rev:
                     previews.append(Pivot(
                         price=zhigh,
-                        actual_price=highs[i],
-                        bar_index=i,
+                        actual_price=zhigh_actual,
+                        bar_index=zhigh_bar,
                         is_high=True,
                         is_preview=True,
                     ))
                     direction = -1
                     zlow = pl
+                    zlow_actual = lows[i]
+                    zlow_bar = i
 
             elif direction == -1:
                 if pl < zlow:
                     zlow = pl
+                    zlow_actual = lows[i]
+                    zlow_bar = i
                 if ph - zlow >= rev:
                     previews.append(Pivot(
                         price=zlow,
-                        actual_price=lows[i],
-                        bar_index=i,
+                        actual_price=zlow_actual,
+                        bar_index=zlow_bar,
                         is_high=False,
                         is_preview=True,
                     ))
                     direction = 1
                     zhigh = ph
+                    zhigh_actual = highs[i]
+                    zhigh_bar = i
 
         return previews

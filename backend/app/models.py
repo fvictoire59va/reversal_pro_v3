@@ -140,10 +140,15 @@ class AgentPosition(Base):
     entry_price = Column(Float, nullable=False)
     exit_price = Column(Float)
     stop_loss = Column(Float, nullable=False)
+    original_stop_loss = Column(Float)           # Initial SL before breakeven/trailing
     take_profit = Column(Float)
+    tp2 = Column(Float)                          # Second TP target for partial close
     quantity = Column(Float, nullable=False)
+    original_quantity = Column(Float)             # Quantity at open before partial close
     invested_eur = Column(Float)  # EUR amount invested at open (to restore balance correctly)
     status = Column(String(10), nullable=False, default="OPEN")  # OPEN, CLOSED, STOPPED
+    partial_closed = Column(Boolean, default=False)  # True after first partial TP taken
+    partial_pnl = Column(Float)                      # PnL from partial close (EUR)
     entry_signal_id = Column(Integer)
     exit_signal_id = Column(Integer)
     entry_signal_time = Column(DateTime(timezone=True))      # Stable signal key (survives re-analysis)

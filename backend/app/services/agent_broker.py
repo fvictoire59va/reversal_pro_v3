@@ -272,8 +272,10 @@ class AgentBrokerService:
             for pos in open_positions:
                 if await self._check_stop_loss(db, agent, pos, current_price, candle_low, candle_high):
                     continue  # Position was stopped out
+                if await self._check_breakeven(db, agent, pos, current_price):
+                    pass  # SL moved to breakeven, position still open
                 if await self._check_take_profit(db, agent, pos, current_price, candle_low, candle_high):
-                    continue  # Position hit take profit
+                    continue  # Position hit take profit (full or partial)
                 # Update unrealized PnL for surviving open positions
                 await self._update_unrealized_pnl(db, pos, current_price)
 
@@ -592,20 +594,19 @@ class AgentBrokerService:
 
     def _calculate_sl_tp(self, side: str, entry_price: float,
                          pivot_price: Optional[float], atr: Optional[float],
-                         timeframe: str = "1h") -> tuple:
+                         timeframe: str = "1h",
+                         zone_tp: Optional[float] = None) -> tuple:
         """
-        Calculate Stop Loss and Take Profit with timeframe-adaptive R:R.
+        Calculate Stop Loss, TP1, and TP2 with timeframe-adaptive R:R.
 
-        Smaller TFs get tighter SL and lower TP targets because confirmation
-        signals arrive after the move has already started, reducing remaining
-        profit potential.
+        TP1 (take profit 1): target for first partial close (50%)
+        TP2 (take profit 2): extended target for remaining 50%
 
-        Parameters per TF (see TF_PARAMS):
-          1m  → R:R 1.5:1, ATR×1.0, max SL 0.30%
-          5m  → R:R 2.0:1, ATR×1.2, max SL 0.50%
-          15m → R:R 2.5:1, ATR×1.3, max SL 0.80%
-          1h  → R:R 3.0:1, ATR×1.5, max SL 1.50%
-          4h+ → R:R 3.0:1, ATR×1.5, max SL 3.00%
+        If a Supply/Demand zone target is provided (zone_tp), it is used
+        as TP1 when it offers a better R:R than the default fixed ratio.
+        TP2 is always set to 1.5× the TP1 distance.
+
+        Returns (sl, tp1, tp2)
         """
         rr_ratio, atr_mult, max_sl_pct, fallback_sl_pct = self._get_tf_params(timeframe)
 
@@ -623,7 +624,24 @@ class AgentBrokerService:
                 sl = entry_price - max_sl_dist
 
             risk = entry_price - sl
-            tp = entry_price + (rr_ratio * risk)
+            default_tp = entry_price + (rr_ratio * risk)
+
+            # Use zone-based TP if it's above entry and offers reasonable R:R
+            if zone_tp and zone_tp > entry_price:
+                zone_reward = zone_tp - entry_price
+                zone_rr = zone_reward / risk if risk > 0 else 0
+                # Accept zone TP if R:R >= 1.0 (at least 1:1)
+                if zone_rr >= 1.0:
+                    tp1 = zone_tp
+                else:
+                    tp1 = default_tp
+            else:
+                tp1 = default_tp
+
+            # TP2 = 1.5× the TP1 distance beyond entry
+            tp1_dist = tp1 - entry_price
+            tp2 = entry_price + (1.5 * tp1_dist)
+
         else:  # SHORT
             if pivot_price and pivot_price > entry_price:
                 sl = pivot_price
@@ -638,9 +656,174 @@ class AgentBrokerService:
                 sl = entry_price + max_sl_dist
 
             risk = sl - entry_price
-            tp = entry_price - (rr_ratio * risk)
+            default_tp = entry_price - (rr_ratio * risk)
 
-        return round(sl, 2), round(tp, 2)
+            # Use zone-based TP if it's below entry and offers reasonable R:R
+            if zone_tp and zone_tp < entry_price:
+                zone_reward = entry_price - zone_tp
+                zone_rr = zone_reward / risk if risk > 0 else 0
+                if zone_rr >= 1.0:
+                    tp1 = zone_tp
+                else:
+                    tp1 = default_tp
+            else:
+                tp1 = default_tp
+
+            # TP2 = 1.5× the TP1 distance beyond entry
+            tp1_dist = entry_price - tp1
+            tp2 = entry_price - (1.5 * tp1_dist)
+
+        return round(sl, 2), round(tp1, 2), round(tp2, 2)
+
+    # ── P6: Zone-based TP target ──────────────────────────────
+    async def _get_zone_tp(self, db: AsyncSession, symbol: str,
+                           timeframe: str, side: str,
+                           entry_price: float) -> Optional[float]:
+        """
+        Query persisted S/D zones to find a TP target based on market structure.
+
+        For LONG: find the nearest Supply zone above entry → TP = zone bottom_price
+        For SHORT: find the nearest Demand zone below entry → TP = zone top_price
+
+        Returns the zone-derived TP price, or None if no suitable zone is found.
+        """
+        if side == "LONG":
+            result = await db.execute(text("""
+                SELECT bottom_price FROM zones
+                WHERE symbol = :symbol AND timeframe = :timeframe
+                  AND zone_type = 'SUPPLY' AND center_price > :entry_price
+                ORDER BY center_price ASC
+                LIMIT 1
+            """), {"symbol": symbol, "timeframe": timeframe, "entry_price": entry_price})
+        else:  # SHORT
+            result = await db.execute(text("""
+                SELECT top_price FROM zones
+                WHERE symbol = :symbol AND timeframe = :timeframe
+                  AND zone_type = 'DEMAND' AND center_price < :entry_price
+                ORDER BY center_price DESC
+                LIMIT 1
+            """), {"symbol": symbol, "timeframe": timeframe, "entry_price": entry_price})
+
+        row = result.fetchone()
+        if row:
+            logger.info(f"Zone-based TP for {side}: {row[0]:.2f} (entry={entry_price:.2f})")
+            return row[0]
+        return None
+
+    # ── P7: EMA Trend Filter ─────────────────────────────────
+    async def _is_ema_trend_against(self, db: AsyncSession, agent_name: str,
+                                     symbol: str, timeframe: str,
+                                     side: str) -> bool:
+        """
+        Check the current EMA trend from the latest analysis run.
+
+        Rules:
+        - LONG  → trend must NOT be BEARISH (BULLISH or NEUTRAL allowed)
+        - SHORT → trend must NOT be BULLISH (BEARISH or NEUTRAL allowed)
+
+        This prevents trading against the established EMA trend direction
+        while allowing entries during neutral/transitional phases.
+        """
+        result = await db.execute(text("""
+            SELECT current_trend FROM analysis_runs
+            WHERE symbol = :symbol AND timeframe = :timeframe
+            ORDER BY created_at DESC
+            LIMIT 1
+        """), {"symbol": symbol, "timeframe": timeframe})
+        row = result.fetchone()
+
+        if not row or not row[0]:
+            return False  # No trend data → allow trade
+
+        trend = row[0]  # "BULLISH", "BEARISH", or "NEUTRAL"
+
+        if side == "LONG" and trend == "BEARISH":
+            logger.info(
+                f"[{agent_name}] SKIPPING LONG: EMA trend is BEARISH "
+                f"on {timeframe} → trading against the trend"
+            )
+            return True
+
+        if side == "SHORT" and trend == "BULLISH":
+            logger.info(
+                f"[{agent_name}] SKIPPING SHORT: EMA trend is BULLISH "
+                f"on {timeframe} → trading against the trend"
+            )
+            return True
+
+        logger.debug(f"[{agent_name}] EMA trend {trend} compatible with {side}")
+        return False
+
+    # ── P10: Breakeven Mechanism ──────────────────────────────
+    async def _check_breakeven(self, db: AsyncSession, agent: Agent,
+                               pos: AgentPosition,
+                               current_price: float) -> bool:
+        """
+        Move SL to breakeven (entry price) when the position has moved
+        >= 1× risk in profit direction.
+
+        This protects accumulated profit and eliminates downside risk
+        on winning trades.
+
+        Returns True if breakeven was activated, False otherwise.
+        """
+        # Skip if already at breakeven or better
+        if pos.side == "LONG" and pos.stop_loss >= pos.entry_price:
+            return False
+        if pos.side == "SHORT" and pos.stop_loss <= pos.entry_price:
+            return False
+
+        # Calculate the original risk distance
+        original_sl = pos.original_stop_loss or pos.stop_loss
+        risk = abs(pos.entry_price - original_sl)
+
+        if risk <= 0:
+            return False
+
+        # Check if price has moved >= 1× risk in our favor
+        if pos.side == "LONG":
+            profit_distance = current_price - pos.entry_price
+            if profit_distance >= risk:
+                old_sl = pos.stop_loss
+                pos.stop_loss = pos.entry_price
+                await db.commit()
+                logger.info(
+                    f"[{agent.name}] BREAKEVEN activated for LONG: "
+                    f"SL moved {old_sl:.2f} → {pos.entry_price:.2f} "
+                    f"(price={current_price:.2f}, risk={risk:.2f})"
+                )
+                await self._log(db, agent.id, "BREAKEVEN_ACTIVATED", {
+                    "position_id": pos.id,
+                    "side": pos.side,
+                    "old_sl": old_sl,
+                    "new_sl": pos.entry_price,
+                    "current_price": current_price,
+                    "risk": round(risk, 2),
+                })
+                return True
+
+        else:  # SHORT
+            profit_distance = pos.entry_price - current_price
+            if profit_distance >= risk:
+                old_sl = pos.stop_loss
+                pos.stop_loss = pos.entry_price
+                await db.commit()
+                logger.info(
+                    f"[{agent.name}] BREAKEVEN activated for SHORT: "
+                    f"SL moved {old_sl:.2f} → {pos.entry_price:.2f} "
+                    f"(price={current_price:.2f}, risk={risk:.2f})"
+                )
+                await self._log(db, agent.id, "BREAKEVEN_ACTIVATED", {
+                    "position_id": pos.id,
+                    "side": pos.side,
+                    "old_sl": old_sl,
+                    "new_sl": pos.entry_price,
+                    "current_price": current_price,
+                    "risk": round(risk, 2),
+                })
+                return True
+
+        return False
 
     def _is_risk_too_small(self, agent_name: str, side: str, entry_price: float,
                            sl: float, timeframe: str) -> bool:
@@ -736,16 +919,18 @@ class AgentBrokerService:
                                      symbol: str, timeframe: str,
                                      side: str) -> bool:
         """
-        Require the higher-timeframe trend to CONFIRM the trade direction.
+        Check the higher-timeframe trend to CONFIRM the trade direction.
 
-        - LONG  → HTF must show higher lows (bullish pivots ascending)
-        - SHORT → HTF must show lower highs (bearish pivots descending)
+        Uses a RELAXED approach (2/3 pivots or EMA trend) instead of
+        requiring 3/3 strictly monotone pivots. This avoids over-filtering
+        in ranging/consolidating markets.
 
-        The trade is blocked if:
-        1. HTF trend is explicitly against (opposite momentum), OR
-        2. HTF trend is NOT confirmed in the right direction (neutral/unclear)
-
-        This means we only trade WITH the bigger-picture trend.
+        Method:
+        1. Check 3 most recent HTF pivots: if at least 2 out of 3
+           consecutive pairs confirm the direction → allow.
+        2. If not enough pivots (<3), fall back to HTF EMA trend.
+        3. If EMA trend is neutral or confirms → allow.
+        4. Only block if the HTF clearly opposes the trade.
         """
         htf_list = HTF_MAP.get(timeframe, [])
         if not htf_list:
@@ -753,7 +938,7 @@ class AgentBrokerService:
 
         for htf in htf_list:
             if side == "LONG":
-                # For LONG: we need HTF bullish pivots (lows) making higher lows
+                # For LONG: check HTF bullish pivots (lows) for higher lows
                 result = await db.execute(text("""
                     SELECT price FROM signals
                     WHERE symbol = :symbol AND timeframe = :timeframe
@@ -763,32 +948,53 @@ class AgentBrokerService:
                 """), {"symbol": symbol, "timeframe": htf})
                 rows = result.fetchall()
 
-                if len(rows) < 3:
-                    logger.info(
-                        f"[{agent_name}] SKIPPING LONG: not enough HTF {htf} "
-                        f"bullish pivots to confirm uptrend ({len(rows)}/3)"
-                    )
-                    return True  # No confirmation → block
+                if len(rows) >= 3:
+                    prices = [r[0] for r in rows]
+                    p_newest, p_middle, p_oldest = prices[0], prices[1], prices[2]
 
-                prices = [r[0] for r in rows]
-                p_newest, p_middle, p_oldest = prices[0], prices[1], prices[2]
+                    # Count how many pairs confirm higher lows (ascending)
+                    confirms = 0
+                    if p_newest > p_middle:
+                        confirms += 1
+                    if p_middle > p_oldest:
+                        confirms += 1
 
-                # Require higher lows (ascending bullish pivots)
-                if p_newest > p_middle > p_oldest:
-                    logger.info(
-                        f"[{agent_name}] LONG confirmed: HTF {htf} higher lows "
-                        f"({p_oldest:.2f} < {p_middle:.2f} < {p_newest:.2f}) → HTF uptrend ✓"
-                    )
-                    # HTF confirms → allow
+                    if confirms >= 1:
+                        # At least 1 out of 2 pairs confirms → allow
+                        logger.info(
+                            f"[{agent_name}] LONG OK: HTF {htf} pivots "
+                            f"({p_oldest:.2f}, {p_middle:.2f}, {p_newest:.2f}) "
+                            f"— {confirms}/2 pairs confirm higher lows ✓"
+                        )
+                    else:
+                        # 0/2 pairs confirm → both pairs show lower lows → block
+                        logger.info(
+                            f"[{agent_name}] SKIPPING LONG: HTF {htf} showing lower lows "
+                            f"({p_oldest:.2f}, {p_middle:.2f}, {p_newest:.2f}) "
+                            f"— 0/2 pairs confirm → HTF downtrend"
+                        )
+                        return True
+
+                elif len(rows) >= 2:
+                    # Only 2 pivots: check if the pair confirms
+                    p_newest, p_oldest = rows[0][0], rows[1][0]
+                    if p_newest < p_oldest:
+                        # Latest low is lower → downtrend → check EMA fallback
+                        htf_ema_against = await self._is_ema_trend_against(
+                            db, agent_name, symbol, htf, side
+                        )
+                        if htf_ema_against:
+                            return True
                 else:
-                    logger.info(
-                        f"[{agent_name}] SKIPPING LONG: HTF {htf} NOT showing higher lows "
-                        f"({p_oldest:.2f}, {p_middle:.2f}, {p_newest:.2f}) → no HTF uptrend"
+                    # Not enough pivots: fall back to EMA trend on HTF
+                    htf_ema_against = await self._is_ema_trend_against(
+                        db, agent_name, symbol, htf, side
                     )
-                    return True  # Not confirmed → block
+                    if htf_ema_against:
+                        return True
 
             else:  # SHORT
-                # For SHORT: we need HTF bearish pivots (highs) making lower highs
+                # For SHORT: check HTF bearish pivots (highs) for lower highs
                 result = await db.execute(text("""
                     SELECT price FROM signals
                     WHERE symbol = :symbol AND timeframe = :timeframe
@@ -798,31 +1004,47 @@ class AgentBrokerService:
                 """), {"symbol": symbol, "timeframe": htf})
                 rows = result.fetchall()
 
-                if len(rows) < 3:
-                    logger.info(
-                        f"[{agent_name}] SKIPPING SHORT: not enough HTF {htf} "
-                        f"bearish pivots to confirm downtrend ({len(rows)}/3)"
-                    )
-                    return True  # No confirmation → block
+                if len(rows) >= 3:
+                    prices = [r[0] for r in rows]
+                    p_newest, p_middle, p_oldest = prices[0], prices[1], prices[2]
 
-                prices = [r[0] for r in rows]
-                p_newest, p_middle, p_oldest = prices[0], prices[1], prices[2]
+                    # Count how many pairs confirm lower highs (descending)
+                    confirms = 0
+                    if p_newest < p_middle:
+                        confirms += 1
+                    if p_middle < p_oldest:
+                        confirms += 1
 
-                # Require lower highs (descending bearish pivots)
-                if p_newest < p_middle < p_oldest:
-                    logger.info(
-                        f"[{agent_name}] SHORT confirmed: HTF {htf} lower highs "
-                        f"({p_oldest:.2f} > {p_middle:.2f} > {p_newest:.2f}) → HTF downtrend ✓"
-                    )
-                    # HTF confirms → allow
+                    if confirms >= 1:
+                        logger.info(
+                            f"[{agent_name}] SHORT OK: HTF {htf} pivots "
+                            f"({p_oldest:.2f}, {p_middle:.2f}, {p_newest:.2f}) "
+                            f"— {confirms}/2 pairs confirm lower highs ✓"
+                        )
+                    else:
+                        logger.info(
+                            f"[{agent_name}] SKIPPING SHORT: HTF {htf} showing higher highs "
+                            f"({p_oldest:.2f}, {p_middle:.2f}, {p_newest:.2f}) "
+                            f"— 0/2 pairs confirm → HTF uptrend"
+                        )
+                        return True
+
+                elif len(rows) >= 2:
+                    p_newest, p_oldest = rows[0][0], rows[1][0]
+                    if p_newest > p_oldest:
+                        htf_ema_against = await self._is_ema_trend_against(
+                            db, agent_name, symbol, htf, side
+                        )
+                        if htf_ema_against:
+                            return True
                 else:
-                    logger.info(
-                        f"[{agent_name}] SKIPPING SHORT: HTF {htf} NOT showing lower highs "
-                        f"({p_oldest:.2f}, {p_middle:.2f}, {p_newest:.2f}) → no HTF downtrend"
+                    htf_ema_against = await self._is_ema_trend_against(
+                        db, agent_name, symbol, htf, side
                     )
-                    return True  # Not confirmed → block
+                    if htf_ema_against:
+                        return True
 
-        return False  # All HTFs confirmed → allow trade
+        return False  # All HTFs confirmed or neutral → allow trade
 
     async def _get_available_capital(self, db: AsyncSession, agent: Agent) -> float:
         """Return agent's current balance."""
@@ -866,7 +1088,14 @@ class AgentBrokerService:
         )
         atr = await self._get_current_atr(db, agent.symbol, agent.timeframe)
 
-        sl, tp = self._calculate_sl_tp(side, current_price, pivot_price, atr, agent.timeframe)
+        # P6: Get zone-based TP target from S/D zones
+        zone_tp = await self._get_zone_tp(
+            db, agent.symbol, agent.timeframe, side, current_price
+        )
+
+        sl, tp1, tp2 = self._calculate_sl_tp(
+            side, current_price, pivot_price, atr, agent.timeframe, zone_tp=zone_tp
+        )
 
         # ── Minimum risk filter ──
         # Skip trades where the SL is too close to entry (opposite reversals
@@ -906,6 +1135,17 @@ class AgentBrokerService:
             })
             return
 
+        # ── P7: EMA trend filter (same TF) ──
+        # Block the trade if the EMA trend on the current timeframe opposes
+        if await self._is_ema_trend_against(db, f"agent_{agent.id}",
+                                             agent.symbol, agent.timeframe, side):
+            await self._log(db, agent.id, "TRADE_SKIPPED", {
+                "side": side,
+                "reason": "ema_trend_against",
+                "entry_price": current_price,
+            })
+            return
+
         # Execute order
         order_result = await hyperliquid_client.market_open(
             symbol=agent.symbol,
@@ -931,16 +1171,21 @@ class AgentBrokerService:
         sig_info = sig_row.fetchone()
 
         # Create position record
+        qty = order_result.quantity or (trade_amount / current_price)
         position = AgentPosition(
             agent_id=agent.id,
             symbol=agent.symbol,
             side=side,
             entry_price=order_result.filled_price or current_price,
             stop_loss=sl,
-            take_profit=tp,
-            quantity=order_result.quantity or (trade_amount / current_price),
+            original_stop_loss=sl,
+            take_profit=tp1,
+            tp2=tp2,
+            quantity=qty,
+            original_quantity=qty,
             invested_eur=trade_amount,  # Store EUR amount invested for balance restoration
             status="OPEN",
+            partial_closed=False,
             entry_signal_id=signal_id,
             entry_signal_time=sig_info[0] if sig_info else None,
             entry_signal_is_bullish=sig_info[1] if sig_info else (side == "LONG"),
@@ -953,18 +1198,23 @@ class AgentBrokerService:
         await db.refresh(position)
 
         risk = abs(current_price - sl)
-        reward = abs(tp - current_price)
+        reward = abs(tp1 - current_price)
+        reward2 = abs(tp2 - current_price)
 
         await self._log(db, agent.id, "POSITION_OPENED", {
             "position_id": position.id,
             "side": side,
             "entry_price": current_price,
             "stop_loss": sl,
-            "take_profit": tp,
+            "take_profit_1": tp1,
+            "take_profit_2": tp2,
+            "zone_tp_used": zone_tp is not None,
             "quantity": position.quantity,
             "risk": round(risk, 2),
-            "reward": round(reward, 2),
-            "rr_ratio": round(reward / risk, 2) if risk > 0 else 0,
+            "reward_tp1": round(reward, 2),
+            "reward_tp2": round(reward2, 2),
+            "rr_ratio_tp1": round(reward / risk, 2) if risk > 0 else 0,
+            "rr_ratio_tp2": round(reward2 / risk, 2) if risk > 0 else 0,
             "mode": agent.mode,
             "is_paper": order_result.is_paper,
         })
@@ -972,7 +1222,7 @@ class AgentBrokerService:
         # Send Telegram notification
         await telegram_service.notify_position_opened(
             agent.name, agent.symbol, side, current_price,
-            sl, tp, position.quantity, agent.mode
+            sl, tp1, position.quantity, agent.mode
         )
 
     async def _close_position_internal(self, db: AsyncSession, pos: AgentPosition,
@@ -1002,7 +1252,7 @@ class AgentBrokerService:
 
         actual_exit = order_result.filled_price if order_result.success else exit_price
 
-        # Calculate PnL in USDT (prices are USDT on Hyperliquid)
+        # Calculate PnL in USDT on the REMAINING quantity
         if pos.side == "LONG":
             pnl_usdt = (actual_exit - pos.entry_price) * pos.quantity
             pnl_pct = ((actual_exit - pos.entry_price) / pos.entry_price) * 100
@@ -1013,18 +1263,21 @@ class AgentBrokerService:
         # Convert PnL to EUR for storage
         pnl_eur = await hyperliquid_client.convert_usdt_to_eur(pnl_usdt)
 
+        # Include partial PnL if a partial close has already occurred
+        total_pnl_eur = pnl_eur + (pos.partial_pnl or 0.0)
+
         pos.exit_price = actual_exit
-        pos.pnl = round(pnl_eur, 4)
+        pos.pnl = round(total_pnl_eur, 4)
         pos.pnl_percent = round(pnl_pct, 2)
         pos.status = "STOPPED" if reason == "STOP_LOSS" else "CLOSED"
         pos.exit_signal_id = exit_signal_id
         pos.closed_at = datetime.now(timezone.utc)
 
         # Restore balance to agent in EUR
-        # Use invested_eur (stored at open time) + pnl_eur to avoid exchange rate drift
+        # Use invested_eur (stored at open time) + total_pnl_eur to avoid exchange rate drift
         invested_eur = pos.invested_eur or agent.trade_amount
         if agent:
-            agent.balance = round(invested_eur + pnl_eur, 2)
+            agent.balance = round(invested_eur + total_pnl_eur, 2)
 
         await db.commit()
         await db.refresh(pos)
@@ -1058,17 +1311,22 @@ class AgentBrokerService:
 
         if pos.side == "LONG" and low <= pos.stop_loss:
             triggered = True
+            # Use actual candle low as exit (slippage-aware) — not the theoretical SL
+            realistic_exit = min(low, pos.stop_loss)
         elif pos.side == "SHORT" and high >= pos.stop_loss:
             triggered = True
+            realistic_exit = max(high, pos.stop_loss)
+        else:
+            realistic_exit = current_price
 
         if triggered:
             logger.info(
                 f"[{agent.name}] STOP LOSS triggered for {pos.side} "
                 f"@ {current_price:.2f} (SL: {pos.stop_loss:.2f}, "
-                f"Low: {low:.2f}, High: {high:.2f})"
+                f"Low: {low:.2f}, High: {high:.2f}, exit: {realistic_exit:.2f})"
             )
             await self._close_position_internal(
-                db, pos, exit_price=pos.stop_loss, reason="STOP_LOSS"
+                db, pos, exit_price=realistic_exit, reason="STOP_LOSS"
             )
             return True
 
@@ -1077,7 +1335,16 @@ class AgentBrokerService:
     async def _check_take_profit(self, db: AsyncSession, agent: Agent,
                                 pos: AgentPosition, current_price: float,
                                 candle_low: float = None, candle_high: float = None) -> bool:
-        """Check if price has hit the take profit (using candle high/low for wick detection)."""
+        """
+        Check if price has hit take profit, with partial close support (P14).
+
+        Two-stage take profit:
+        1. TP1 (take_profit): close 50% of position, move SL to breakeven,
+           set take_profit to TP2 for the remaining 50%.
+        2. TP2: close the remaining 50%.
+
+        Returns True if the position was fully closed, False otherwise.
+        """
         if pos.take_profit is None:
             return False
 
@@ -1091,18 +1358,80 @@ class AgentBrokerService:
         elif pos.side == "SHORT" and low <= pos.take_profit:
             triggered = True
 
-        if triggered:
-            logger.info(
-                f"[{agent.name}] TAKE PROFIT triggered for {pos.side} "
-                f"@ {current_price:.2f} (TP: {pos.take_profit:.2f}, "
-                f"Low: {low:.2f}, High: {high:.2f})"
-            )
-            await self._close_position_internal(
-                db, pos, exit_price=pos.take_profit, reason="TAKE_PROFIT"
-            )
-            return True
+        if not triggered:
+            return False
 
-        return False
+        # ── Stage 1: First partial close (50%) ──
+        if not pos.partial_closed and pos.tp2:
+            partial_qty = pos.quantity / 2.0
+
+            logger.info(
+                f"[{agent.name}] PARTIAL TP1 triggered for {pos.side} "
+                f"@ {pos.take_profit:.2f} — closing 50% ({partial_qty:.6f}), "
+                f"SL → breakeven, TP → TP2={pos.tp2:.2f}"
+            )
+
+            # Calculate PnL on the partial close
+            if pos.side == "LONG":
+                partial_pnl_usdt = (pos.take_profit - pos.entry_price) * partial_qty
+            else:
+                partial_pnl_usdt = (pos.entry_price - pos.take_profit) * partial_qty
+
+            partial_pnl_eur = await hyperliquid_client.convert_usdt_to_eur(partial_pnl_usdt)
+
+            # Execute partial close order
+            settings = get_settings()
+            await hyperliquid_client.market_close(
+                symbol=pos.symbol,
+                side=pos.side,
+                quantity=partial_qty,
+                current_price=pos.take_profit,
+                mode=agent.mode,
+                wallet_address=settings.hyperliquid_wallet_address,
+                api_secret=settings.hyperliquid_api_secret,
+            )
+
+            # Update position: reduce quantity, move SL to breakeven, advance TP to TP2
+            pos.quantity = pos.quantity - partial_qty
+            pos.partial_closed = True
+            pos.partial_pnl = round(partial_pnl_eur, 4)
+            pos.stop_loss = pos.entry_price  # Move SL to breakeven
+            pos.take_profit = pos.tp2         # Advance to TP2
+            await db.commit()
+
+            await self._log(db, agent.id, "PARTIAL_TP_CLOSED", {
+                "position_id": pos.id,
+                "side": pos.side,
+                "tp1_price": pos.entry_price + (pos.take_profit - pos.entry_price),  # original TP1
+                "partial_qty": round(partial_qty, 6),
+                "remaining_qty": round(pos.quantity, 6),
+                "partial_pnl_eur": round(partial_pnl_eur, 4),
+                "new_sl": pos.entry_price,
+                "new_tp": pos.tp2,
+            })
+
+            # Send Telegram notification for partial close
+            await telegram_service.notify_position_closed(
+                agent.name, pos.symbol, pos.side, pos.entry_price,
+                pos.take_profit, partial_pnl_eur,
+                round((pos.take_profit - pos.entry_price) / pos.entry_price * 100 if pos.side == "LONG"
+                      else (pos.entry_price - pos.take_profit) / pos.entry_price * 100, 2),
+                "PARTIAL_TP1", agent.mode
+            )
+
+            return False  # Position still open with remaining 50%
+
+        # ── Stage 2: Full close at TP2 (or TP1 if no partial TP) ──
+        logger.info(
+            f"[{agent.name}] {'TP2' if pos.partial_closed else 'TAKE PROFIT'} "
+            f"triggered for {pos.side} @ {current_price:.2f} "
+            f"(TP: {pos.take_profit:.2f})"
+        )
+        await self._close_position_internal(
+            db, pos, exit_price=pos.take_profit,
+            reason="TAKE_PROFIT_2" if pos.partial_closed else "TAKE_PROFIT"
+        )
+        return True
 
     async def _update_unrealized_pnl(self, db: AsyncSession, pos: AgentPosition,
                                      current_price: float):

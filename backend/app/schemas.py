@@ -192,9 +192,14 @@ class PositionResponse(BaseModel):
     entry_price: float
     exit_price: Optional[float] = None
     stop_loss: float
+    original_stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
+    tp2: Optional[float] = None
     quantity: float
+    original_quantity: Optional[float] = None
     status: str
+    partial_closed: bool = False
+    partial_pnl: Optional[float] = None
     pnl: Optional[float] = None
     pnl_percent: Optional[float] = None
     unrealized_pnl: Optional[float] = None

@@ -147,8 +147,52 @@ function init() {
 
 // ── Load chart data ─────────────────────────────────────────
 let isLoading = false;
+let isLoadingTimeout = null;  // Safety timeout to reset isLoading flag
+let loadRetryCount = 0;
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 2000;
+let hasChartData = false; // Track if chart ever received data
 
-async function loadChart() {
+function resetLoadingState() {
+    isLoading = false;
+    showLoading(false);
+    if (isLoadingTimeout) {
+        clearTimeout(isLoadingTimeout);
+        isLoadingTimeout = null;
+    }
+}
+
+function showChartError(message) {
+    let overlay = document.getElementById('chartErrorOverlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'chartErrorOverlay';
+        overlay.style.cssText = `
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: rgba(255,255,255,0.92); z-index: 10; gap: 12px;
+            font-family: 'JetBrains Mono', monospace; text-align: center;
+        `;
+        document.querySelector('.chart-wrapper').appendChild(overlay);
+    }
+    overlay.innerHTML = `
+        <div style="font-size: 36px;">⚠️</div>
+        <div style="font-size: 14px; color: #606873; max-width: 300px;">${message}</div>
+        <button onclick="this.parentElement.remove(); loadChart()" 
+                style="padding: 6px 16px; border: 1px solid #00aa55; background: #00aa55; 
+                       color: white; border-radius: 4px; cursor: pointer; font-size: 12px;">
+            ⟳ Réessayer
+        </button>
+    `;
+    overlay.style.display = 'flex';
+}
+
+function hideChartError() {
+    const overlay = document.getElementById('chartErrorOverlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
+async function loadChart(retryOnFail = true) {
     // Prevent multiple simultaneous loads
     if (isLoading) {
         console.log('Load already in progress, skipping...');
@@ -158,6 +202,19 @@ async function loadChart() {
     isLoading = true;
     showLoading(true);
     setStatus(`Loading ${currentSymbol} ${currentTimeframe}...`);
+    
+    // Safety: auto-reset isLoading after 30s to prevent permanent lock
+    isLoadingTimeout = setTimeout(() => {
+        if (isLoading) {
+            console.warn('Loading timeout — resetting state');
+            resetLoadingState();
+            setStatus('Timeout — retrying...', true);
+            if (retryOnFail && loadRetryCount < MAX_RETRIES) {
+                loadRetryCount++;
+                setTimeout(() => loadChart(true), RETRY_DELAY_MS);
+            }
+        }
+    }, 30000);
 
     try {
         const data = await fetchChartData(
@@ -171,6 +228,9 @@ async function loadChart() {
         chart.setData(data);
         updateInfoPanel(data);
         checkNewSignals(data);
+        hideChartError();
+        hasChartData = true;
+        loadRetryCount = 0; // Reset retry counter on success
         
         // Load and display agent positions for this chart
         try {
@@ -188,21 +248,34 @@ async function loadChart() {
             setStatus(`${msg}. Click "Fetch" to load from exchange.`, true);
             
             // Reset loading state before showing prompt
-            showLoading(false);
-            isLoading = false;
+            resetLoadingState();
             
-            // Auto-prompt to fetch data
-            if (confirm(`${msg}.\n\nWould you like to fetch it from the exchange now?`)) {
+            // Auto-prompt to fetch data (only on first encounter, not in live loop)
+            if (!hasChartData && confirm(`${msg}.\n\nWould you like to fetch it from the exchange now?`)) {
                 await fetchFromExchangeAndLoad();
+            } else if (!hasChartData) {
+                showChartError(`Aucune donnée pour ${currentSymbol} ${currentTimeframe}.<br>Cliquez sur "Fetch" pour charger.`);
             }
             return;
         } else {
-            setStatus(`Error: ${err.message}`, true);
+            const errMsg = `Erreur: ${err.message}`;
+            setStatus(errMsg, true);
+            console.error('Load error:', err);
+            
+            // Retry with backoff
+            if (retryOnFail && loadRetryCount < MAX_RETRIES) {
+                loadRetryCount++;
+                const delay = RETRY_DELAY_MS * loadRetryCount;
+                setStatus(`${errMsg} — retry ${loadRetryCount}/${MAX_RETRIES} dans ${delay/1000}s...`, true);
+                resetLoadingState();
+                setTimeout(() => loadChart(true), delay);
+                return;
+            } else if (!hasChartData) {
+                showChartError(`Impossible de charger les données.<br>${err.message}`);
+            }
         }
-        console.error('Load error:', err);
     } finally {
-        showLoading(false);
-        isLoading = false;
+        resetLoadingState();
     }
 }
 
@@ -224,14 +297,24 @@ async function fetchFromExchangeAndLoad() {
         setStatus(`Fetched ${result.bars_stored} bars — running analysis...`);
 
         // Reset loading flag to allow loadChart to proceed
-        isLoading = false;
+        resetLoadingState();
         
         // Now load chart with analysis
         await loadChart();
     } catch (err) {
-        setStatus(`Fetch error: ${err.message}`, true);
-        showLoading(false);
-        isLoading = false;
+        console.error('Fetch error:', err);
+        resetLoadingState();
+        
+        // If fetch fails but we have DB data, fall back to loadChart
+        setStatus(`Fetch error: ${err.message} — loading cached data...`, true);
+        try {
+            await loadChart(false); // Don't retry to avoid loop
+        } catch (loadErr) {
+            setStatus(`Erreur: ${err.message}`, true);
+            if (!hasChartData) {
+                showChartError(`Impossible de récupérer les données.<br>${err.message}`);
+            }
+        }
     }
 }
 
@@ -948,4 +1031,6 @@ function formatDateLabel(dateStr) {
 }
 
 // ── Boot ────────────────────────────────────────────────────
+// Expose loadChart globally for the chart error overlay retry button
+window.loadChart = (...args) => loadChart(...args);
 document.addEventListener('DOMContentLoaded', init);

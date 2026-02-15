@@ -33,6 +33,18 @@ TIMEFRAME_SECONDS = {
     "1h": 3600, "4h": 14400, "1d": 86400,
 }
 
+# Higher-timeframe map: for each TF, which HTFs to check for trend confirmation
+# We check up to 2 levels above for fast TFs, 1 level for slower ones
+HTF_MAP = {
+    "1m":  ["5m", "15m"],
+    "5m":  ["15m", "1h"],
+    "15m": ["1h", "4h"],
+    "30m": ["1h", "4h"],
+    "1h":  ["4h"],
+    "4h":  ["1d"],
+    "1d":  [],           # No higher TF to check
+}
+
 
 class AgentBrokerService:
     """Manages all trading agents and their autonomous execution."""
@@ -218,6 +230,30 @@ class AgentBrokerService:
                 logger.info(f"[{agent.name}] Analysis refreshed with sensitivity={agent.sensitivity}, mode={agent.signal_mode}")
             except Exception as e:
                 logger.warning(f"[{agent.name}] Analysis refresh failed: {e}")
+
+            # 1b. Also refresh higher-timeframe analyses for trend confirmation
+            #     Fetch OHLCV data from exchange first, then run analysis
+            htf_list = HTF_MAP.get(agent.timeframe, [])
+            if htf_list:
+                from .data_ingestion import ingestion_service
+                for htf in htf_list:
+                    try:
+                        # Fetch OHLCV data for the HTF (may not be in watchlist)
+                        await ingestion_service.fetch_and_store(
+                            db, symbol=agent.symbol, timeframe=htf,
+                            exchange_id="binance", limit=500,
+                        )
+                        htf_request = AnalysisRequest(
+                            symbol=agent.symbol,
+                            timeframe=htf,
+                            limit=500,
+                            sensitivity=agent.sensitivity,
+                            signal_mode=agent.signal_mode,
+                        )
+                        await analysis_service.run_analysis(db, htf_request)
+                        logger.debug(f"[{agent.name}] HTF {htf} data fetched & analysis refreshed")
+                    except Exception as e:
+                        logger.debug(f"[{agent.name}] HTF {htf} refresh failed (non-blocking): {e}")
 
             # 2. Get open positions and current price
             open_positions = await self._get_open_positions(db, agent.id)
@@ -651,6 +687,59 @@ class AgentBrokerService:
 
         return False
 
+    async def _is_htf_trend_against(self, db: AsyncSession, agent_name: str,
+                                     symbol: str, timeframe: str,
+                                     side: str) -> bool:
+        """
+        Check higher-timeframe pivot trends to confirm the trade direction.
+
+        For each HTF above the agent's TF, query the last 3 pivots and
+        apply the same lower-highs / higher-lows logic.
+
+        The trade is blocked if ANY higher TF shows momentum against.
+        This ensures we trade WITH the bigger-picture trend, not against it.
+        """
+        htf_list = HTF_MAP.get(timeframe, [])
+        if not htf_list:
+            return False
+
+        check_bullish = (side == "SHORT")
+
+        for htf in htf_list:
+            result = await db.execute(text("""
+                SELECT price FROM signals
+                WHERE symbol = :symbol AND timeframe = :timeframe
+                  AND is_preview = FALSE AND is_bullish = :is_bullish
+                ORDER BY time DESC
+                LIMIT 3
+            """), {"symbol": symbol, "timeframe": htf, "is_bullish": check_bullish})
+            rows = result.fetchall()
+
+            if len(rows) < 3:
+                continue  # Not enough HTF data, skip this level
+
+            prices = [r[0] for r in rows]
+            p_newest, p_middle, p_oldest = prices[0], prices[1], prices[2]
+
+            if side == "LONG":
+                # HTF bearish pivots (highs) making lower highs → HTF downtrend
+                if p_newest < p_middle < p_oldest:
+                    logger.info(
+                        f"[{agent_name}] SKIPPING LONG: HTF {htf} shows lower highs "
+                        f"({p_oldest:.2f} > {p_middle:.2f} > {p_newest:.2f}) → HTF downtrend"
+                    )
+                    return True
+            else:  # SHORT
+                # HTF bullish pivots (lows) making higher lows → HTF uptrend
+                if p_newest > p_middle > p_oldest:
+                    logger.info(
+                        f"[{agent_name}] SKIPPING SHORT: HTF {htf} shows higher lows "
+                        f"({p_oldest:.2f} < {p_middle:.2f} < {p_newest:.2f}) → HTF uptrend"
+                    )
+                    return True
+
+        return False
+
     async def _get_available_capital(self, db: AsyncSession, agent: Agent) -> float:
         """Return agent's current balance."""
         return agent.balance
@@ -708,7 +797,7 @@ class AgentBrokerService:
             })
             return
 
-        # ── Pivot momentum filter ──
+        # ── Pivot momentum filter (same TF) ──
         # Lower highs → skip LONG (downtrend)
         # Higher lows → skip SHORT (uptrend)
         if await self._is_pivot_momentum_against(db, f"agent_{agent.id}",
@@ -717,6 +806,19 @@ class AgentBrokerService:
                 "side": side,
                 "reason": "pivot_momentum_against",
                 "entry_price": current_price,
+            })
+            return
+
+        # ── Higher-timeframe trend filter ──
+        # Check pivots on HTFs (e.g. 1m→5m+15m, 5m→15m+1h)
+        # Block the trade if the bigger-picture trend is opposite
+        if await self._is_htf_trend_against(db, f"agent_{agent.id}",
+                                             agent.symbol, agent.timeframe, side):
+            await self._log(db, agent.id, "TRADE_SKIPPED", {
+                "side": side,
+                "reason": "htf_trend_against",
+                "entry_price": current_price,
+                "htf_checked": HTF_MAP.get(agent.timeframe, []),
             })
             return
 

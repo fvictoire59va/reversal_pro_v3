@@ -795,11 +795,40 @@ body {
 }
 
 .agent-card:hover {
-    border-color: var(--green);
+    border-color: var(--accent);
+    box-shadow: 0 0 8px rgba(255,255,255,0.05);
 }
 
-.agent-card.inactive {
-    opacity: 0.6;
+/* ── Agent card color states ── */
+.agent-card.agent-inactive {
+    background: #1a1a2e;
+    border-color: #333;
+    opacity: 0.55;
+}
+
+.agent-card.agent-long {
+    background: rgba(33, 100, 243, 0.12);
+    border-color: rgba(33, 100, 243, 0.4);
+}
+
+.agent-card.agent-short {
+    background: rgba(255, 82, 82, 0.12);
+    border-color: rgba(255, 82, 82, 0.4);
+}
+
+.agent-card.agent-profit {
+    background: rgba(0, 200, 83, 0.08);
+    border-color: rgba(0, 200, 83, 0.3);
+}
+
+.agent-card.agent-loss {
+    background: rgba(255, 152, 0, 0.08);
+    border-color: rgba(255, 152, 0, 0.3);
+}
+
+.agent-card.agent-idle {
+    background: var(--bg-card);
+    border-color: var(--border);
 }
 
 .agent-card-header {

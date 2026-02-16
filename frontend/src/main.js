@@ -595,7 +595,7 @@ async function handleClosePosition(positionId) {
 async function loadAgentsOverview() {
     try {
         const data = await getAgentsOverview();
-        renderAgentsList(data.agents);
+        renderAgentsList(data.agents, data.open_positions);
         renderPositionsTable(data.open_positions);
         updateAgentBadges(data);
         updatePerfAgentSelect(data.agents);
@@ -630,7 +630,7 @@ function updateAgentBadges(data) {
     pnlBadge.style.color = pnl > 0 ? 'var(--green)' : pnl < 0 ? 'var(--red)' : 'var(--text-muted)';
 }
 
-function renderAgentsList(agents) {
+function renderAgentsList(agents, openPositions = []) {
     const container = document.getElementById('agentsList');
 
     if (!agents.length) {
@@ -638,9 +638,29 @@ function renderAgentsList(agents) {
         return;
     }
 
+    // Build a map of agent_id -> position side
+    const agentSideMap = {};
+    for (const pos of openPositions) {
+        agentSideMap[pos.agent_id] = pos.side;
+    }
+
     const html = agents.map(agent => {
         const statusClass = agent.is_active ? 'active' : '';
-        const cardClass = agent.is_active ? '' : 'inactive';
+        // Determine card color class based on state
+        let cardClass = '';
+        if (!agent.is_active) {
+            cardClass = 'agent-inactive';
+        } else if (agentSideMap[agent.id] === 'LONG') {
+            cardClass = 'agent-long';
+        } else if (agentSideMap[agent.id] === 'SHORT') {
+            cardClass = 'agent-short';
+        } else if (agent.total_pnl > 0) {
+            cardClass = 'agent-profit';
+        } else if (agent.total_pnl < 0) {
+            cardClass = 'agent-loss';
+        } else {
+            cardClass = 'agent-idle';
+        }
         const modeClass = agent.mode === 'paper' ? 'paper' : 'live';
         const modeLabel = agent.mode === 'paper' ? '📄 PAPER' : '🔴 LIVE';
         const toggleLabel = agent.is_active ? '⏸' : '▶';

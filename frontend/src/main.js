@@ -691,6 +691,11 @@ function renderAgentsList(agents, openPositions = []) {
                     <span class="agent-info">${agent.trade_amount}€</span>
                     <span class="agent-info">Solde: ${(agent.balance || 0).toFixed(2)}€</span>
                 </div>
+                <div class="agent-card-params">
+                    <span class="agent-param" title="Sensitivity">🎯 ${agent.sensitivity || 'Medium'}</span>
+                    <span class="agent-param" title="Signal Mode">📡 ${agent.signal_mode || 'Confirmed Only'}</span>
+                    <span class="agent-param" title="Analysis Bars">📊 ${agent.analysis_limit || 500}</span>
+                </div>
                 <div class="agent-card-pnl">
                     <span class="agent-pnl ${pnlClass}">PnL: ${pnlSign}${pnl.toFixed(2)}</span>
                     ${uPnlHtml}

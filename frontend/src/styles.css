@@ -843,6 +843,21 @@ body {
     gap: 8px;
 }
 
+.agent-card-params {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    padding-top: 3px;
+}
+
+.agent-param {
+    font-size: 9px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+
 .agent-card-pnl {
     display: flex;
     align-items: center;

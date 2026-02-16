@@ -657,18 +657,24 @@ function renderAgentsList(agents) {
 
         return `
             <div class="agent-card ${cardClass}">
-                <span class="agent-status-dot ${statusClass}"></span>
-                <span class="agent-name">${agent.name}</span>
-                <span class="agent-info">${agent.symbol} ${agent.timeframe}</span>
-                <span class="agent-mode-badge ${modeClass}">${modeLabel}</span>
-                <span class="agent-info">${agent.trade_amount}€</span>
-                <span class="agent-info">Solde: ${(agent.balance || 0).toFixed(2)}€</span>
-                <span class="agent-pnl ${pnlClass}">${pnlSign}${pnl.toFixed(2)}</span>
-                ${uPnlHtml}
-                <span class="agent-info">(${agent.open_positions} pos)</span>
-                <div class="agent-actions">
-                    <button onclick="window._handleToggleAgent(${agent.id})" title="${toggleTitle}">${toggleLabel}</button>
-                    <button class="btn-delete" onclick="window._handleDeleteAgent(${agent.id}, '${agent.name}')" title="Supprimer">✕</button>
+                <div class="agent-card-header">
+                    <span class="agent-status-dot ${statusClass}"></span>
+                    <span class="agent-name">${agent.name}</span>
+                    <span class="agent-mode-badge ${modeClass}">${modeLabel}</span>
+                    <div class="agent-actions">
+                        <button onclick="window._handleToggleAgent(${agent.id})" title="${toggleTitle}">${toggleLabel}</button>
+                        <button class="btn-delete" onclick="window._handleDeleteAgent(${agent.id}, '${agent.name}')" title="Supprimer">✕</button>
+                    </div>
+                </div>
+                <div class="agent-card-details">
+                    <span class="agent-info">${agent.symbol} ${agent.timeframe}</span>
+                    <span class="agent-info">${agent.trade_amount}€</span>
+                    <span class="agent-info">Solde: ${(agent.balance || 0).toFixed(2)}€</span>
+                </div>
+                <div class="agent-card-pnl">
+                    <span class="agent-pnl ${pnlClass}">PnL: ${pnlSign}${pnl.toFixed(2)}</span>
+                    ${uPnlHtml}
+                    <span class="agent-info">${agent.open_positions} pos</span>
                 </div>
             </div>
         `;

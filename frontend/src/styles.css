@@ -769,18 +769,20 @@ body {
 /* ── Agents List ───────────────────────────────────────────── */
 .agents-list {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 8px 16px;
-    overflow-x: auto;
+    overflow-y: auto;
     flex-shrink: 0;
     border-bottom: 1px solid var(--border);
     min-height: 32px;
+    max-height: 140px;
 }
 
 .agent-card {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    gap: 4px;
     padding: 6px 10px;
     border-radius: var(--radius);
     border: 1px solid var(--border);
@@ -788,6 +790,8 @@ body {
     white-space: nowrap;
     font-size: 11px;
     transition: all 0.15s;
+    min-width: 180px;
+    max-width: 240px;
 }
 
 .agent-card:hover {
@@ -798,10 +802,29 @@ body {
     opacity: 0.6;
 }
 
+.agent-card-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.agent-card-details {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.agent-card-pnl {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .agent-card .agent-name {
     font-weight: 600;
     font-family: var(--font-mono);
     color: var(--text-primary);
+    flex: 1;
 }
 
 .agent-card .agent-info {
@@ -846,7 +869,7 @@ body {
 .agent-card .agent-actions {
     display: flex;
     gap: 4px;
-    margin-left: 4px;
+    margin-left: auto;
 }
 
 .agent-card .agent-actions button {

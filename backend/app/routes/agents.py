@@ -502,7 +502,7 @@ async def get_positions_for_chart(
     
     positions = []
     for row in result.fetchall():
-        open_details = row[16] or {}
+        open_details = row[15] or {}  # index 15 = open_details JSONB subquery
         positions.append({
             "id": row[0],
             "agent_id": row[1],
@@ -528,14 +528,14 @@ async def get_positions_for_chart(
                 "rr_ratio_tp1": open_details.get("rr_ratio_tp1"),
                 "rr_ratio_tp2": open_details.get("rr_ratio_tp2"),
                 "zone_tp_used": open_details.get("zone_tp_used"),
-                "mode": open_details.get("mode") or row[22],
+                "mode": open_details.get("mode") or row[21],
                 "is_paper": open_details.get("is_paper"),
             } if open_details else {},
-            "original_stop_loss": row[17],
-            "tp2": row[18],
-            "original_quantity": row[19],
-            "partial_closed": row[20],
-            "partial_pnl": row[21],
+            "original_stop_loss": row[16],
+            "tp2": row[17],
+            "original_quantity": row[18],
+            "partial_closed": row[19],
+            "partial_pnl": row[20],
         })
     
     return {"positions": positions}

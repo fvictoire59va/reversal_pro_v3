@@ -32,6 +32,7 @@ export class ChartManager {
         this.signalMarkers = [];      // Reversal signal markers (from analysis)
         this.agentMarkers = [];       // Agent position entry markers
         this.signalMeta = {};         // Signal metadata keyed by Paris-shifted time
+        this.agentMeta = {};          // Agent marker metadata keyed by Paris-shifted time
         this.lastCandleTime = null;   // Last candle time (Paris-shifted)
         
         // Position Tool state
@@ -146,21 +147,56 @@ export class ChartManager {
 
         // ── Signal tooltip on crosshair move ──
         this._tooltipEl = document.getElementById('signalTooltip');
+        this._agentTooltipEl = document.getElementById('agentTooltip');
         this.chart.subscribeCrosshairMove(param => this._handleCrosshairMove(param));
     }
 
     /**
      * Show/hide the signal detection tooltip when crosshair is on a signal candle.
+     * Also shows agent position tooltip when crosshair is on an agent marker.
      */
     _handleCrosshairMove(param) {
         const tooltip = this._tooltipEl;
-        if (!tooltip) return;
+        const agentTooltip = this._agentTooltipEl;
 
         if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
-            tooltip.style.display = 'none';
+            if (tooltip) tooltip.style.display = 'none';
+            if (agentTooltip) agentTooltip.style.display = 'none';
             return;
         }
 
+        // ── Agent position tooltip (priority over signal tooltip) ──
+        const agentMetaList = this.agentMeta[param.time];
+        if (agentMetaList && agentMetaList.length > 0 && agentTooltip) {
+            if (tooltip) tooltip.style.display = 'none';
+
+            const headerEl = document.getElementById('agentTooltipHeader');
+            const bodyEl = document.getElementById('agentTooltipBody');
+
+            let html = '';
+            for (const meta of agentMetaList) {
+                if (meta.type === 'entry') {
+                    html += this._buildEntryTooltipHTML(meta);
+                } else if (meta.type === 'exit') {
+                    html += this._buildExitTooltipHTML(meta);
+                }
+            }
+
+            headerEl.textContent = agentMetaList.length === 1
+                ? agentMetaList[0].agentName
+                : `${agentMetaList.length} positions`;
+            headerEl.style.color = agentMetaList[0].color || '#e0e6f0';
+            bodyEl.innerHTML = html;
+
+            this._positionTooltip(agentTooltip, param);
+            agentTooltip.style.display = 'block';
+            return;
+        }
+
+        if (agentTooltip) agentTooltip.style.display = 'none';
+
+        // ── Signal tooltip ──
+        if (!tooltip) return;
         const meta = this.signalMeta[param.time];
         if (!meta) {
             tooltip.style.display = 'none';
@@ -194,14 +230,20 @@ export class ChartManager {
             : '—';
 
         // Position tooltip near the crosshair
+        this._positionTooltip(tooltip, param);
+        tooltip.style.display = 'block';
+    }
+
+    /**
+     * Position a tooltip element near the crosshair point, keeping it inside chart bounds.
+     */
+    _positionTooltip(tooltipEl, param) {
         const chartRect = this.container.getBoundingClientRect();
-        const wrapperRect = this.container.parentElement.getBoundingClientRect();
         let left = param.point.x + 16;
         let top = param.point.y - 10;
 
-        // Keep tooltip inside chart bounds
-        const tooltipW = tooltip.offsetWidth || 220;
-        const tooltipH = tooltip.offsetHeight || 80;
+        const tooltipW = tooltipEl.offsetWidth || 260;
+        const tooltipH = tooltipEl.offsetHeight || 120;
         if (left + tooltipW > chartRect.width) {
             left = param.point.x - tooltipW - 16;
         }
@@ -210,9 +252,107 @@ export class ChartManager {
         }
         if (top < 0) top = 8;
 
-        tooltip.style.left = `${left}px`;
-        tooltip.style.top = `${top}px`;
-        tooltip.style.display = 'block';
+        tooltipEl.style.left = `${left}px`;
+        tooltipEl.style.top = `${top}px`;
+    }
+
+    /**
+     * Build tooltip HTML for an agent ENTRY marker.
+     */
+    _buildEntryTooltipHTML(meta) {
+        const sideColor = meta.side === 'LONG' ? '#0088dd' : '#dd8800';
+        const sideIcon = meta.side === 'LONG' ? '▲' : '▼';
+        const modeLabel = meta.mode === 'live' ? '🔴 LIVE' : '📝 Paper';
+        let html = `<div class="tooltip-section">`;
+        html += `<div style="color:${sideColor}; font-weight:700; font-size:12px;">${sideIcon} ${meta.side}</div>`;
+        html += this._tooltipRow('Entrée', `${meta.entryPrice?.toFixed(2)}`);
+        if (meta.stopLoss != null) html += this._tooltipRow('Stop Loss', `${meta.stopLoss.toFixed(2)}`);
+        if (meta.tp1 != null) html += this._tooltipRow('TP1', `${meta.tp1.toFixed(2)}`);
+        if (meta.tp2 != null) html += this._tooltipRow('TP2', `${meta.tp2.toFixed(2)}`);
+        if (meta.risk != null) html += this._tooltipRow('Risque', `${meta.risk.toFixed(2)}`);
+        if (meta.rrRatio != null) html += this._tooltipRow('R:R', `1:${meta.rrRatio.toFixed(1)}`);
+        if (meta.zoneTpUsed) html += this._tooltipRow('Zone TP', '✓ S/D zone');
+        html += this._tooltipRow('Mode', modeLabel);
+        if (meta.openedAt) {
+            const dt = new Date(meta.openedAt);
+            html += this._tooltipRow('Ouvert le', dt.toLocaleString('fr-FR', {
+                timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+            }));
+        }
+        html += `</div>`;
+        return html;
+    }
+
+    /**
+     * Build tooltip HTML for an agent EXIT marker (SL / TP / signal close).
+     */
+    _buildExitTooltipHTML(meta) {
+        const reasonLabels = {
+            'STOP_LOSS': 'Stop Loss',
+            'TAKE_PROFIT': 'Take Profit',
+            'TAKE_PROFIT_2': 'Take Profit 2',
+            'BULLISH_REVERSAL': 'Reversal Bullish',
+            'BEARISH_REVERSAL': 'Reversal Bearish',
+            'MANUAL_CLOSE': 'Fermeture manuelle',
+            'PARTIAL_TP1': 'TP1 Partiel (50%)',
+            'SIGNAL': 'Signal opposé',
+        };
+
+        const reasonClasses = {
+            'STOP_LOSS': 'reason-sl',
+            'TAKE_PROFIT': 'reason-tp',
+            'TAKE_PROFIT_2': 'reason-tp',
+            'BULLISH_REVERSAL': 'reason-signal',
+            'BEARISH_REVERSAL': 'reason-signal',
+            'MANUAL_CLOSE': 'reason-manual',
+            'PARTIAL_TP1': 'reason-tp',
+            'SIGNAL': 'reason-signal',
+        };
+
+        const reasonText = reasonLabels[meta.closeReason] || meta.closeReason || 'Inconnue';
+        const reasonClass = reasonClasses[meta.closeReason] || 'reason-manual';
+
+        const pnlClass = meta.pnl > 0 ? 'tooltip-pnl-positive' : 'tooltip-pnl-negative';
+        const pnlSign = meta.pnl > 0 ? '+' : '';
+
+        let html = `<div class="tooltip-section">`;
+        html += `<span class="tooltip-reason ${reasonClass}">${reasonText}</span>`;
+        html += this._tooltipRow('Entrée', `${meta.entryPrice?.toFixed(2)}`);
+        html += this._tooltipRow('Sortie', `${meta.exitPrice?.toFixed(2)}`);
+        if (meta.pnl != null) {
+            html += `<div class="signal-tooltip-row">
+                <span class="signal-tooltip-label">PnL :</span>
+                <span class="signal-tooltip-value ${pnlClass}">${pnlSign}${meta.pnl.toFixed(2)}€ (${pnlSign}${meta.pnlPercent?.toFixed(2) || '0'}%)</span>
+            </div>`;
+        }
+        if (meta.originalSl != null && meta.originalSl !== meta.stopLoss) {
+            html += this._tooltipRow('SL initial', `${meta.originalSl.toFixed(2)}`);
+            html += this._tooltipRow('SL final', `${meta.stopLoss?.toFixed(2)}`);
+        }
+        if (meta.partialClosed) {
+            html += this._tooltipRow('Partial TP', `✓ 50% fermé`);
+            if (meta.partialPnl != null) html += this._tooltipRow('PnL partiel', `${meta.partialPnl.toFixed(2)}€`);
+        }
+        // Duration
+        if (meta.openedAt && meta.closedAt) {
+            const durationMs = new Date(meta.closedAt) - new Date(meta.openedAt);
+            const hours = Math.floor(durationMs / 3600000);
+            const mins = Math.floor((durationMs % 3600000) / 60000);
+            html += this._tooltipRow('Durée', hours > 0 ? `${hours}h ${mins}m` : `${mins}m`);
+        }
+        html += `</div>`;
+        return html;
+    }
+
+    /**
+     * Helper to create a tooltip row.
+     */
+    _tooltipRow(label, value) {
+        return `<div class="signal-tooltip-row">
+            <span class="signal-tooltip-label">${label} :</span>
+            <span class="signal-tooltip-value">${value}</span>
+        </div>`;
     }
 
     /**
@@ -520,6 +660,7 @@ export class ChartManager {
         this.agentZoneSeries = [];
 
         this.agentMarkers = [];
+        this.agentMeta = {};  // Reset agent metadata
 
         if (!positions || positions.length === 0) {
             // Restore signal-only markers
@@ -581,8 +722,9 @@ export class ChartManager {
 
                 // Add markers for entry (apply Paris timezone shift like candle data)
                 const entryRawTime = utcToParisTimestamp(Math.floor(new Date(pos.opened_at).getTime() / 1000));
+                const entrySnapTime = this._snapToCandleTime(entryRawTime);
                 const entryMarker = {
-                    time: this._snapToCandleTime(entryRawTime),
+                    time: entrySnapTime,
                     position: isLong ? 'belowBar' : 'aboveBar',
                     color: isLong ? '#0088dd' : '#dd8800',
                     shape: isLong ? 'arrowUp' : 'arrowDown',
@@ -590,6 +732,25 @@ export class ChartManager {
                     size: 2,
                 };
                 this.agentMarkers.push(entryMarker);
+
+                // Store entry metadata for tooltip
+                const od = pos.open_details || {};
+                if (!this.agentMeta[entrySnapTime]) this.agentMeta[entrySnapTime] = [];
+                this.agentMeta[entrySnapTime].push({
+                    type: 'entry',
+                    agentName: pos.agent_name,
+                    side: pos.side,
+                    entryPrice: pos.entry_price,
+                    stopLoss: od.stop_loss ?? pos.stop_loss,
+                    tp1: od.take_profit_1 ?? pos.take_profit,
+                    tp2: od.take_profit_2 ?? pos.tp2,
+                    risk: od.risk,
+                    rrRatio: od.rr_ratio_tp1,
+                    zoneTpUsed: od.zone_tp_used,
+                    mode: od.mode || 'paper',
+                    openedAt: pos.opened_at,
+                    color: isLong ? '#0088dd' : '#dd8800',
+                });
 
                 // Draw TP/SL colored zones
                 if (this.lastCandleTime && pos.take_profit && pos.stop_loss) {
@@ -674,6 +835,25 @@ export class ChartManager {
                         text: `${pos.agent_name}`,
                         size: 1,
                     });
+
+                    // Store entry metadata for tooltip (closed position)
+                    const od = pos.open_details || {};
+                    if (!this.agentMeta[entryTs]) this.agentMeta[entryTs] = [];
+                    this.agentMeta[entryTs].push({
+                        type: 'entry',
+                        agentName: pos.agent_name,
+                        side: pos.side,
+                        entryPrice: pos.entry_price,
+                        stopLoss: od.stop_loss ?? pos.original_stop_loss ?? pos.stop_loss,
+                        tp1: od.take_profit_1 ?? pos.take_profit,
+                        tp2: od.take_profit_2 ?? pos.tp2,
+                        risk: od.risk,
+                        rrRatio: od.rr_ratio_tp1,
+                        zoneTpUsed: od.zone_tp_used,
+                        mode: od.mode || 'paper',
+                        openedAt: pos.opened_at,
+                        color: isLong ? '#0088dd' : '#dd8800',
+                    });
                 }
 
                 // Exit marker for closed position (circle showing result)
@@ -693,6 +873,27 @@ export class ChartManager {
                         shape: 'circle',
                         text: `${exitLabel} ${pnlStr}`,
                         size: 1,
+                    });
+
+                    // Store exit metadata for tooltip
+                    if (!this.agentMeta[exitTs]) this.agentMeta[exitTs] = [];
+                    this.agentMeta[exitTs].push({
+                        type: 'exit',
+                        agentName: pos.agent_name,
+                        side: pos.side,
+                        entryPrice: pos.entry_price,
+                        exitPrice: pos.exit_price,
+                        stopLoss: pos.stop_loss,
+                        originalSl: pos.original_stop_loss,
+                        pnl: pos.pnl,
+                        pnlPercent: pos.pnl_percent,
+                        closeReason: pos.close_reason,
+                        status: pos.status,
+                        openedAt: pos.opened_at,
+                        closedAt: pos.closed_at,
+                        partialClosed: pos.partial_closed,
+                        partialPnl: pos.partial_pnl,
+                        color: isWin ? '#00aa55' : '#dd3344',
                     });
                 }
             }

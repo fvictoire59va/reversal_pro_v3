@@ -472,7 +472,26 @@ async def get_positions_for_chart(
         SELECT p.id, p.agent_id, a.name as agent_name, p.side, 
                p.entry_price, p.stop_loss, p.take_profit, p.quantity,
                p.status, p.pnl, p.pnl_percent, p.opened_at, p.closed_at,
-               p.exit_price
+               p.exit_price,
+               -- Close reason from logs
+               (SELECT l.details->>'reason'
+                FROM agent_logs l
+                WHERE l.agent_id = p.agent_id
+                  AND l.action IN ('POSITION_CLOSED', 'POSITION_STOPPED')
+                  AND (l.details->>'position_id')::int = p.id
+                ORDER BY l.created_at DESC LIMIT 1
+               ) as close_reason,
+               -- Open details from logs (JSON)
+               (SELECT l.details
+                FROM agent_logs l
+                WHERE l.agent_id = p.agent_id
+                  AND l.action = 'POSITION_OPENED'
+                  AND (l.details->>'position_id')::int = p.id
+                ORDER BY l.created_at DESC LIMIT 1
+               ) as open_details,
+               p.original_stop_loss, p.tp2, p.original_quantity,
+               p.partial_closed, p.partial_pnl,
+               a.mode as agent_mode
         FROM agent_positions p
         JOIN agents a ON p.agent_id = a.id
         WHERE p.symbol = :symbol 
@@ -483,6 +502,7 @@ async def get_positions_for_chart(
     
     positions = []
     for row in result.fetchall():
+        open_details = row[16] or {}
         positions.append({
             "id": row[0],
             "agent_id": row[1],
@@ -498,6 +518,24 @@ async def get_positions_for_chart(
             "opened_at": row[11].isoformat() if row[11] else None,
             "closed_at": row[12].isoformat() if row[12] else None,
             "exit_price": row[13],
+            "close_reason": row[14],
+            "open_details": {
+                "stop_loss": open_details.get("stop_loss"),
+                "take_profit_1": open_details.get("take_profit_1"),
+                "take_profit_2": open_details.get("take_profit_2"),
+                "risk": open_details.get("risk"),
+                "reward_tp1": open_details.get("reward_tp1"),
+                "rr_ratio_tp1": open_details.get("rr_ratio_tp1"),
+                "rr_ratio_tp2": open_details.get("rr_ratio_tp2"),
+                "zone_tp_used": open_details.get("zone_tp_used"),
+                "mode": open_details.get("mode") or row[22],
+                "is_paper": open_details.get("is_paper"),
+            } if open_details else {},
+            "original_stop_loss": row[17],
+            "tp2": row[18],
+            "original_quantity": row[19],
+            "partial_closed": row[20],
+            "partial_pnl": row[21],
         })
     
     return {"positions": positions}

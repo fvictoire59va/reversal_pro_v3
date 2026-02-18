@@ -758,6 +758,33 @@ function renderPositionsTable(positions) {
             ? pos.current_price.toLocaleString('fr-FR', { minimumFractionDigits: 2 })
             : '—';
 
+        // Progression: breakeven, partial TP info
+        let progressCell = '';
+        const isBreakeven = (pos.side === 'LONG' && pos.stop_loss >= pos.entry_price)
+            || (pos.side === 'SHORT' && pos.stop_loss <= pos.entry_price);
+        if (pos.partial_closed) {
+            const partialSign = (pos.partial_pnl || 0) >= 0 ? '+' : '';
+            progressCell += `<span style="color:var(--green)">✓ TP1 50%</span><br/>`;
+            progressCell += `<small style="color:var(--green)">${partialSign}${(pos.partial_pnl || 0).toFixed(2)}€ sécurisé</small><br/>`;
+            progressCell += `<small>TP2: ${pos.take_profit ? pos.take_profit.toLocaleString('fr-FR', {minimumFractionDigits: 2}) : '—'}</small>`;
+        } else if (isBreakeven) {
+            progressCell += `<span style="color:var(--blue)">🛡 Breakeven</span><br/>`;
+            if (pos.tp2) {
+                progressCell += `<small>TP1: ${pos.take_profit ? pos.take_profit.toLocaleString('fr-FR', {minimumFractionDigits: 2}) : '—'}</small><br/>`;
+                progressCell += `<small>TP2: ${pos.tp2.toLocaleString('fr-FR', {minimumFractionDigits: 2})}</small>`;
+            }
+        } else {
+            progressCell = '<small style="color:var(--muted)">En attente</small>';
+            if (pos.tp2) {
+                progressCell += `<br/><small>TP1: ${pos.take_profit ? pos.take_profit.toLocaleString('fr-FR', {minimumFractionDigits: 2}) : '—'}</small>`;
+                progressCell += `<br/><small>TP2: ${pos.tp2.toLocaleString('fr-FR', {minimumFractionDigits: 2})}</small>`;
+            }
+        }
+
+        // TP column: show current active TP target
+        const tpDisplay = pos.take_profit ? pos.take_profit.toLocaleString('fr-FR', { minimumFractionDigits: 2 }) : '—';
+        const tpLabel = pos.partial_closed ? 'TP2' : (pos.tp2 ? 'TP1' : 'TP');
+
         return `
             <tr>
                 <td>${pos.agent_name}</td>
@@ -765,9 +792,10 @@ function renderPositionsTable(positions) {
                 <td>${pos.symbol}</td>
                 <td>${pos.entry_price.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}</td>
                 <td>${curPrice}</td>
-                <td style="color:var(--red)">${pos.stop_loss.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}</td>
-                <td style="color:var(--green)">${pos.take_profit ? pos.take_profit.toLocaleString('fr-FR', { minimumFractionDigits: 2 }) : '—'}</td>
-                <td>${pos.quantity.toFixed(6)}</td>
+                <td style="color:var(--red)">${pos.stop_loss.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}${isBreakeven ? '<br/><small>🛡 BE</small>' : ''}</td>
+                <td style="color:var(--green)">${tpDisplay}<br/><small>${tpLabel}</small></td>
+                <td>${pos.quantity.toFixed(6)}${pos.partial_closed ? '<br/><small>(50% restant)</small>' : ''}</td>
+                <td>${progressCell}</td>
                 <td class="${pnlCellClass}">${pnlCell}</td>
                 <td>${openedDateTime}</td>
                 <td>${duration}</td>

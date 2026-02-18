@@ -752,6 +752,55 @@ export class ChartManager {
                     color: isLong ? '#0088dd' : '#dd8800',
                 });
 
+                // Add breakeven marker on chart
+                if (pos.breakeven_at) {
+                    const beTs = this._snapToCandleTime(
+                        utcToParisTimestamp(Math.floor(new Date(pos.breakeven_at).getTime() / 1000))
+                    );
+                    this.agentMarkers.push({
+                        time: beTs,
+                        position: 'inBar',
+                        color: '#0088dd',
+                        shape: 'circle',
+                        text: '🛡 BE',
+                        size: 1,
+                    });
+                }
+
+                // Add partial TP1 marker on chart
+                if (pos.partial_closed && pos.partial_tp_at) {
+                    const tpTs = this._snapToCandleTime(
+                        utcToParisTimestamp(Math.floor(new Date(pos.partial_tp_at).getTime() / 1000))
+                    );
+                    const partialSign = (pos.partial_pnl || 0) >= 0 ? '+' : '';
+                    const partialPnlStr = pos.partial_pnl != null ? ` ${partialSign}${pos.partial_pnl.toFixed(2)}€` : '';
+                    this.agentMarkers.push({
+                        time: tpTs,
+                        position: isLong ? 'aboveBar' : 'belowBar',
+                        color: '#00aa55',
+                        shape: 'circle',
+                        text: `TP1 50%${partialPnlStr}`,
+                        size: 2,
+                    });
+
+                    // Store TP1 metadata for tooltip
+                    if (!this.agentMeta[tpTs]) this.agentMeta[tpTs] = [];
+                    this.agentMeta[tpTs].push({
+                        type: 'exit',
+                        agentName: pos.agent_name,
+                        side: pos.side,
+                        entryPrice: pos.entry_price,
+                        exitPrice: pos.open_details?.take_profit_1 || pos.take_profit,
+                        pnl: pos.partial_pnl,
+                        pnlPercent: null,
+                        closeReason: 'PARTIAL_TP1',
+                        status: 'OPEN',
+                        partialClosed: true,
+                        partialPnl: pos.partial_pnl,
+                        color: '#00aa55',
+                    });
+                }
+
                 // Draw TP/SL colored zones
                 if (this.lastCandleTime && pos.take_profit && pos.stop_loss) {
                     const zoneStart = entryMarker.time;

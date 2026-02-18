@@ -67,9 +67,14 @@ async def get_agents_overview(db: AsyncSession = Depends(get_db)):
             entry_price=p.entry_price,
             exit_price=p.exit_price,
             stop_loss=p.stop_loss,
+            original_stop_loss=p.original_stop_loss,
             take_profit=p.take_profit,
+            tp2=p.tp2,
             quantity=p.quantity,
+            original_quantity=p.original_quantity,
             status=p.status,
+            partial_closed=p.partial_closed or False,
+            partial_pnl=p.partial_pnl,
             pnl=p.pnl,
             pnl_percent=p.pnl_percent,
             unrealized_pnl=p.unrealized_pnl,
@@ -491,7 +496,23 @@ async def get_positions_for_chart(
                ) as open_details,
                p.original_stop_loss, p.tp2, p.original_quantity,
                p.partial_closed, p.partial_pnl,
-               a.mode as agent_mode
+               a.mode as agent_mode,
+               -- Partial TP timestamp from logs
+               (SELECT l.created_at
+                FROM agent_logs l
+                WHERE l.agent_id = p.agent_id
+                  AND l.action = 'PARTIAL_TP_CLOSED'
+                  AND (l.details->>'position_id')::int = p.id
+                ORDER BY l.created_at DESC LIMIT 1
+               ) as partial_tp_at,
+               -- Breakeven timestamp from logs
+               (SELECT l.created_at
+                FROM agent_logs l
+                WHERE l.agent_id = p.agent_id
+                  AND l.action = 'BREAKEVEN_ACTIVATED'
+                  AND (l.details->>'position_id')::int = p.id
+                ORDER BY l.created_at DESC LIMIT 1
+               ) as breakeven_at
         FROM agent_positions p
         JOIN agents a ON p.agent_id = a.id
         WHERE p.symbol = :symbol 
@@ -536,6 +557,8 @@ async def get_positions_for_chart(
             "original_quantity": row[18],
             "partial_closed": row[19],
             "partial_pnl": row[20],
+            "partial_tp_at": row[22].isoformat() if row[22] else None,
+            "breakeven_at": row[23].isoformat() if row[23] else None,
         })
     
     return {"positions": positions}

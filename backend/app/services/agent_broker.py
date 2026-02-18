@@ -413,21 +413,47 @@ class AgentBrokerService:
             except Exception:
                 pass  # Lock may have expired
 
+    # Throttle: minimum seconds between consecutive runs per timeframe
+    AGENT_CYCLE_SECONDS: Dict[str, int] = {
+        '1m': 55, '5m': 55, '15m': 240, '1h': 240, '4h': 840, '1d': 3540,
+    }
+
     async def run_all_active_agents(self, db: AsyncSession):
-        """Run one cycle for all active agents. Called by the scheduler."""
+        """Run one cycle for all active agents. Called by the scheduler.
+
+        Each agent gets its own DB session so that a failed commit in one
+        agent cannot corrupt the session for subsequent agents.
+        """
         agents = await self.get_all_agents(db)
         active = [a for a in agents if a.is_active]
 
         if not active:
             return
 
-        logger.info(f"Running {len(active)} active agent(s)...")
+        from ..database import async_session
 
+        ran = 0
         for agent in active:
             try:
-                await self.run_agent_cycle(db, agent)
+                # Throttle: skip agent if not enough time since last run
+                throttle_key = f"agent_throttle:{agent.id}"
+                min_gap = self.AGENT_CYCLE_SECONDS.get(agent.timeframe, 240)
+                if await self._redis.get(throttle_key):
+                    continue  # Still within cooldown period
+
+                # Set throttle with TTL (expires automatically)
+                await self._redis.setex(throttle_key, min_gap, "1")
+
+                # Each agent gets its own DB session to prevent
+                # one agent's error from corrupting other agents
+                async with async_session() as agent_db:
+                    await self.run_agent_cycle(agent_db, agent)
+                ran += 1
             except Exception as e:
-                logger.error(f"Agent {agent.name} failed: {e}")
+                logger.error(f"Agent {agent.name} failed: {e}", exc_info=True)
+
+        if ran:
+            logger.info(f"Agent cycle: {ran}/{len(active)} agents executed")
 
     # ── Internal helpers ─────────────────────────────────────
     async def _get_latest_signal(self, db: AsyncSession, symbol: str,
@@ -485,7 +511,7 @@ class AgentBrokerService:
 
         tf_minutes = self._timeframe_to_minutes(agent.timeframe)
         if tf_minutes <= 1:
-            max_bars_back = 15    # 15 min window for 1m
+            max_bars_back = 30    # 30 min window for 1m (tolerates scheduler gaps)
         elif tf_minutes <= 5:
             max_bars_back = 25    # ~2h for 5m
         elif tf_minutes <= 15:

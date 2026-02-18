@@ -47,32 +47,34 @@ async def lifespan(app: FastAPI):
 
             async def auto_analyze_and_run_agents():
                 """Re-run analysis for all watchlist symbols, then run agents."""
-                async with async_session() as db:
-                    try:
-                        from .services.analysis_service import analysis_service
-                        from .schemas import AnalysisRequest
-                        from sqlalchemy import text
+                try:
+                    async with async_session() as db:
+                        try:
+                            from .services.analysis_service import analysis_service
+                            from .schemas import AnalysisRequest
+                            from sqlalchemy import text
 
-                        # Get all active watchlist items
-                        result = await db.execute(
-                            text("SELECT symbol, timeframe FROM watchlist WHERE is_active = TRUE")
-                        )
-                        rows = result.fetchall()
+                            # Get all active watchlist items
+                            result = await db.execute(
+                                text("SELECT symbol, timeframe FROM watchlist WHERE is_active = TRUE")
+                            )
+                            rows = result.fetchall()
 
-                        # Re-run analysis for each
-                        for row in rows:
-                            try:
-                                request = AnalysisRequest(symbol=row[0], timeframe=row[1])
-                                await analysis_service.run_analysis(db, request)
-                            except Exception as e:
-                                logger.warning(f"Auto-analysis error for {row[0]} {row[1]}: {e}")
+                            # Re-run analysis for each
+                            for row in rows:
+                                try:
+                                    request = AnalysisRequest(symbol=row[0], timeframe=row[1])
+                                    await analysis_service.run_analysis(db, request)
+                                except Exception as e:
+                                    logger.warning(f"Auto-analysis error for {row[0]} {row[1]}: {e}")
 
-                        # Run all active agents
-                        await agent_broker_service.run_all_active_agents(db)
-                        logger.info("Agent broker cycle completed")
+                            # Run all active agents (each gets its own DB session)
+                            await agent_broker_service.run_all_active_agents(db)
 
-                    except Exception as e:
-                        logger.error(f"Auto-analyze/agents error: {e}")
+                        except Exception as e:
+                            logger.error(f"Auto-analyze/agents error: {e}", exc_info=True)
+                except Exception as e:
+                    logger.critical(f"SCHEDULER JOB CRASHED: {e}", exc_info=True)
 
             scheduler.add_job(
                 auto_fetch, "interval",

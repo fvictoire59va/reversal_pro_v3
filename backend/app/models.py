@@ -149,6 +149,7 @@ class AgentPosition(Base):
     status = Column(String(10), nullable=False, default="OPEN")  # OPEN, CLOSED, STOPPED
     partial_closed = Column(Boolean, default=False)  # True after first partial TP taken
     partial_pnl = Column(Float)                      # PnL from partial close (EUR)
+    best_price = Column(Float)                         # Best price reached (for trailing stop)
     entry_signal_id = Column(Integer)
     exit_signal_id = Column(Integer)
     entry_signal_time = Column(DateTime(timezone=True))      # Stable signal key (survives re-analysis)

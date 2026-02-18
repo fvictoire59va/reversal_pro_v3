@@ -274,6 +274,9 @@ class AgentBrokerService:
                     continue  # Position was stopped out
                 if await self._check_breakeven(db, agent, pos, current_price):
                     pass  # SL moved to breakeven, position still open
+                # Trailing stop: progressively lock in profits after breakeven
+                if await self._check_trailing_stop(db, agent, pos, current_price, candle_low, candle_high):
+                    pass  # SL trailed closer to current price
                 if await self._check_take_profit(db, agent, pos, current_price, candle_low, candle_high):
                     continue  # Position hit take profit (full or partial)
                 # Update unrealized PnL for surviving open positions
@@ -754,6 +757,129 @@ class AgentBrokerService:
         logger.debug(f"[{agent_name}] EMA trend {trend} compatible with {side}")
         return False
 
+    # ── Trailing Stop Parameters ─────────────────────────────
+    # trail_atr_mult: how many ATRs behind the best price the trailing SL sits
+    # trail_activation_mult: how many × risk the price must move before trailing starts
+    TRAIL_PARAMS = {
+        #  tf_min: (trail_atr_mult, activation_risk_mult)
+        1:    (0.8,  1.0),   # 1m  — tight trail, activates at 1× risk
+        5:    (1.0,  1.0),   # 5m  — trail at 1× ATR after 1× risk
+        15:   (1.2,  1.5),   # 15m — slightly wider
+        60:   (1.5,  1.5),   # 1h  — standard
+        240:  (1.5,  2.0),   # 4h  — wider trail
+        1440: (2.0,  2.0),   # 1d  — widest
+    }
+
+    def _get_trail_params(self, timeframe: str) -> tuple:
+        """Return (trail_atr_mult, activation_risk_mult) for a TF."""
+        tf_min = self._timeframe_to_minutes(timeframe)
+        best = (1.5, 1.5)
+        for minutes in sorted(self.TRAIL_PARAMS.keys()):
+            if tf_min <= minutes:
+                best = self.TRAIL_PARAMS[minutes]
+                break
+        else:
+            best = self.TRAIL_PARAMS[1440]
+        return best
+
+    # ── P15: Trailing Stop Mechanism ─────────────────────────
+    async def _check_trailing_stop(self, db: AsyncSession, agent: Agent,
+                                   pos: AgentPosition,
+                                   current_price: float,
+                                   candle_low: float = None,
+                                   candle_high: float = None) -> bool:
+        """
+        Trailing stop: progressively moves the SL to lock in profits
+        as the price moves in the position's direction.
+
+        Activation: after breakeven has been triggered (SL >= entry for LONG,
+        SL <= entry for SHORT), i.e. the position is already protected.
+
+        Trail distance: ATR × trail_atr_mult (timeframe-adaptive).
+        The SL never moves backward — it only ratchets in the profit direction.
+
+        Returns True if the trailing stop was updated, False otherwise.
+        """
+        # Only trail if breakeven is already active
+        if pos.side == "LONG" and pos.stop_loss < pos.entry_price:
+            return False
+        if pos.side == "SHORT" and pos.stop_loss > pos.entry_price:
+            return False
+
+        # Get ATR for trail distance calculation
+        atr = await self._get_current_atr(db, agent.symbol, agent.timeframe)
+        if not atr or atr <= 0:
+            return False
+
+        trail_atr_mult, _ = self._get_trail_params(agent.timeframe)
+        trail_distance = atr * trail_atr_mult
+
+        # Use candle extreme for best-price tracking (catches wicks)
+        if pos.side == "LONG":
+            extreme = candle_high if candle_high is not None else current_price
+            new_best = max(pos.best_price or pos.entry_price, extreme)
+        else:  # SHORT
+            extreme = candle_low if candle_low is not None else current_price
+            new_best = min(pos.best_price or pos.entry_price, extreme)
+
+        # Update best price if improved
+        if new_best != (pos.best_price or pos.entry_price):
+            pos.best_price = new_best
+
+        # Calculate new trailing SL
+        if pos.side == "LONG":
+            new_sl = round(new_best - trail_distance, 2)
+            # SL must be above current SL (never move backward)
+            if new_sl > pos.stop_loss:
+                old_sl = pos.stop_loss
+                pos.stop_loss = new_sl
+                await db.commit()
+                logger.info(
+                    f"[{agent.name}] TRAILING STOP updated for LONG: "
+                    f"SL {old_sl:.2f} → {new_sl:.2f} "
+                    f"(best={new_best:.2f}, trail={trail_distance:.2f}, "
+                    f"ATR={atr:.2f} × {trail_atr_mult})"
+                )
+                await self._log(db, agent.id, "TRAILING_STOP_UPDATED", {
+                    "position_id": pos.id,
+                    "side": pos.side,
+                    "old_sl": old_sl,
+                    "new_sl": new_sl,
+                    "best_price": new_best,
+                    "trail_distance": round(trail_distance, 2),
+                    "atr": round(atr, 2),
+                    "current_price": current_price,
+                })
+                return True
+        else:  # SHORT
+            new_sl = round(new_best + trail_distance, 2)
+            # SL must be below current SL (never move backward for SHORT)
+            if new_sl < pos.stop_loss:
+                old_sl = pos.stop_loss
+                pos.stop_loss = new_sl
+                await db.commit()
+                logger.info(
+                    f"[{agent.name}] TRAILING STOP updated for SHORT: "
+                    f"SL {old_sl:.2f} → {new_sl:.2f} "
+                    f"(best={new_best:.2f}, trail={trail_distance:.2f}, "
+                    f"ATR={atr:.2f} × {trail_atr_mult})"
+                )
+                await self._log(db, agent.id, "TRAILING_STOP_UPDATED", {
+                    "position_id": pos.id,
+                    "side": pos.side,
+                    "old_sl": old_sl,
+                    "new_sl": new_sl,
+                    "best_price": new_best,
+                    "trail_distance": round(trail_distance, 2),
+                    "atr": round(atr, 2),
+                    "current_price": current_price,
+                })
+                return True
+
+        # Persist best_price even if SL didn't change
+        await db.commit()
+        return False
+
     # ── P10: Breakeven Mechanism ──────────────────────────────
     async def _check_breakeven(self, db: AsyncSession, agent: Agent,
                                pos: AgentPosition,
@@ -1184,6 +1310,7 @@ class AgentBrokerService:
             quantity=qty,
             original_quantity=qty,
             invested_eur=trade_amount,  # Store EUR amount invested for balance restoration
+            best_price=order_result.filled_price or current_price,  # Initialize trailing stop tracker
             status="OPEN",
             partial_closed=False,
             entry_signal_id=signal_id,

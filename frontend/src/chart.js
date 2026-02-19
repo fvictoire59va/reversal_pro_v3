@@ -408,7 +408,7 @@ export class ChartManager {
             'pivot_momentum_against': 'Les 3 derniers pivots indiquent un momentum contraire à la direction du signal.',
             'htf_trend_against': 'La tendance sur le timeframe supérieur est opposée au signal.',
             'ema_trend_against': 'La tendance EMA sur le timeframe actuel est opposée au signal.',
-            'signal_stale': 'Le signal est trop ancien par rapport à la bougie actuelle.',
+            'signal_stale': 'Le signal a été détecté il y a trop longtemps pour être encore actionnable.',
             'no_balance': 'L\'agent n\'a plus de capital disponible pour ouvrir une position.',
             'whipsaw_cooldown': 'La position précédente a été trop courte, cooldown actif pour éviter le whipsaw.',
         };

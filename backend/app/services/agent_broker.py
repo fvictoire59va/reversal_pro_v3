@@ -312,7 +312,7 @@ class AgentBrokerService:
                 opp_time, opp_bullish, opp_price, opp_id, opp_bar_index = opposite_signal
 
                 # Check staleness (relaxed for closing signals: 2x normal threshold)
-                if await self._is_signal_stale(db, agent, opp_bar_index, opp_id, lenient=True):
+                if await self._is_signal_stale(db, agent, opp_id, lenient=True):
                     logger.debug(f"[{agent.name}] Opposite signal {opp_id} is stale, keeping {current_pos.side}")
                     await self._log(db, agent.id, "TRADE_SKIPPED", {
                         "side": "LONG" if opp_bullish else "SHORT",
@@ -406,7 +406,7 @@ class AgentBrokerService:
                 signal_bar_index = latest_signal[4]
 
                 # Staleness check (strict)
-                if await self._is_signal_stale(db, agent, signal_bar_index, signal_id, lenient=False):
+                if await self._is_signal_stale(db, agent, signal_id, lenient=False):
                     await self._log(db, agent.id, "TRADE_SKIPPED", {
                         "side": "LONG" if is_bullish else "SHORT",
                         "reason": "signal_stale",
@@ -517,57 +517,79 @@ class AgentBrokerService:
         return result.fetchone()
 
     async def _is_signal_stale(self, db: AsyncSession, agent: Agent,
-                               signal_bar_index: Optional[int], signal_id: int,
-                               lenient: bool = False) -> bool:
+                               signal_id: int, lenient: bool = False) -> bool:
         """
-        Check if a signal is too far from the end of the analysis window.
+        Check if a signal was detected too long ago to still be actionable.
 
-        The signal's bar_index refers to the PIVOT bar (the reversal extreme),
-        which is naturally several bars before the confirmation bar.
+        Uses the signal's `detected_at` timestamp (when the analysis engine
+        first discovered this signal) rather than the pivot's bar position.
+
+        The old bar_index approach was flawed for fast timeframes: a pivot
+        naturally forms N bars before confirmation, so a freshly-confirmed
+        signal could appear "30 bars old" purely because the pivot was far
+        back — even though detection just happened.
 
         Parameters
         ----------
         lenient : if True, doubles the threshold. Used for closing signals
-                  where we are more tolerant of "older" pivots.
+                  where we are more tolerant.
         """
-        analysis_run_result = await db.execute(text("""
-            SELECT bars_analyzed FROM analysis_runs
-            WHERE symbol = :symbol AND timeframe = :timeframe
-            ORDER BY created_at DESC LIMIT 1
-        """), {"symbol": agent.symbol, "timeframe": agent.timeframe})
-        analysis_run_row = analysis_run_result.fetchone()
+        # Get the signal's detected_at timestamp
+        result = await db.execute(text("""
+            SELECT detected_at FROM signals WHERE id = :signal_id
+        """), {"signal_id": signal_id})
+        row = result.fetchone()
 
-        if not analysis_run_row or signal_bar_index is None:
+        if not row or not row[0]:
             return False  # Cannot determine, assume fresh
 
-        bars_analyzed = analysis_run_row[0]
-        bars_from_end = bars_analyzed - signal_bar_index
+        detected_at = row[0]
+        now = datetime.now(timezone.utc)
 
-        tf_minutes = self._timeframe_to_minutes(agent.timeframe)
-        if tf_minutes <= 1:
-            max_bars_back = 30    # 30 min window for 1m (tolerates scheduler gaps)
-        elif tf_minutes <= 5:
-            max_bars_back = 25    # ~2h for 5m
-        elif tf_minutes <= 15:
-            max_bars_back = 20    # ~5h for 15m
-        else:
-            max_bars_back = 12    # ~12h for 1h
+        # Normalize timezone
+        if detected_at.tzinfo is None:
+            detected_at = detected_at.replace(tzinfo=timezone.utc)
+
+        elapsed_seconds = (now - detected_at).total_seconds()
+
+        # Threshold = max_candles × candle_interval
+        # Lower TFs get more candles because:
+        #  - zigzag confirmation takes more bars relative to price structure
+        #  - scheduler runs every N minutes, so 1m signals need headroom
+        #  - intraday signals are time-sensitive but still need multiple
+        #    agent cycles to be picked up
+        tf_seconds = TIMEFRAME_SECONDS.get(agent.timeframe, 60)
+        tf_minutes = tf_seconds // 60
+
+        if tf_minutes <= 1:        # 1m
+            max_candles = 15       # 15 min — 3 agent cycles
+        elif tf_minutes <= 5:      # 5m
+            max_candles = 10       # 50 min
+        elif tf_minutes <= 15:     # 15m
+            max_candles = 8        # 2h
+        elif tf_minutes <= 60:     # 30m–1h
+            max_candles = 6        # 3–6h
+        else:                      # 4h+
+            max_candles = 4
+
+        max_seconds = max_candles * tf_seconds
 
         # Double threshold for closing signals (lenient mode)
         if lenient:
-            max_bars_back = max_bars_back * 2
+            max_seconds *= 2
 
-        if bars_from_end > max_bars_back:
+        if elapsed_seconds > max_seconds:
             logger.info(
                 f"[{agent.name}] Signal {signal_id} is stale "
-                f"(bar {signal_bar_index}/{bars_analyzed}, {bars_from_end} bars from end, "
-                f"max {max_bars_back}{' lenient' if lenient else ''}), skipping"
+                f"(detected {elapsed_seconds:.0f}s ago, "
+                f"max {max_seconds}s = {max_candles} candles"
+                f"{' lenient' if lenient else ''}), skipping"
             )
             return True
 
         logger.debug(
             f"[{agent.name}] Signal {signal_id} freshness OK "
-            f"(bar {signal_bar_index}/{bars_analyzed}, {bars_from_end} bars from end)"
+            f"(detected {elapsed_seconds:.0f}s ago, max {max_seconds}s)"
         )
         return False
 

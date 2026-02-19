@@ -540,6 +540,42 @@ body {
     font-weight: 700;
 }
 
+/* ── Skipped Signal Tooltip ────────────────────────────────── */
+.skipped-tooltip {
+    min-width: 260px;
+    max-width: 340px;
+    border-color: #555 !important;
+}
+
+.skipped-tooltip .tooltip-section {
+    margin-top: 6px;
+    padding-top: 5px;
+    border-top: 1px solid var(--border, #2d3548);
+}
+
+.skipped-tooltip .tooltip-reason {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+}
+
+.skipped-tooltip .tooltip-reason.reason-skipped {
+    background: rgba(136, 136, 136, 0.25);
+    color: #aaaaaa;
+}
+
+.skipped-tooltip .tooltip-reason-desc {
+    font-size: 10px;
+    color: var(--text-secondary, #8892a4);
+    margin: 4px 0 6px 0;
+    line-height: 1.4;
+    font-style: italic;
+}
+
 /* ── Sidebar ───────────────────────────────────────────────── */
 .sidebar {
     width: 280px;

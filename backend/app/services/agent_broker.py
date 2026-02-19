@@ -314,6 +314,13 @@ class AgentBrokerService:
                 # Check staleness (relaxed for closing signals: 2x normal threshold)
                 if await self._is_signal_stale(db, agent, opp_bar_index, opp_id, lenient=True):
                     logger.debug(f"[{agent.name}] Opposite signal {opp_id} is stale, keeping {current_pos.side}")
+                    await self._log(db, agent.id, "TRADE_SKIPPED", {
+                        "side": "LONG" if opp_bullish else "SHORT",
+                        "reason": "signal_stale",
+                        "signal_time": opp_time.isoformat() if opp_time else None,
+                        "signal_price": opp_price,
+                        "entry_price": current_price,
+                    })
                     return
 
                 # The opposite signal must be NEWER than the entry signal
@@ -357,8 +364,12 @@ class AgentBrokerService:
                             f"(< {min_gap_seconds}s = {min_gap_bars} bars), "
                             f"skipping immediate re-open to avoid whipsaw"
                         )
-                        await self._log(db, agent.id, "REOPEN_SKIPPED", {
+                        await self._log(db, agent.id, "TRADE_SKIPPED", {
+                            "side": "LONG" if opp_bullish else "SHORT",
                             "reason": "whipsaw_cooldown",
+                            "signal_time": opp_time.isoformat() if opp_time else None,
+                            "signal_price": opp_price,
+                            "entry_price": current_price_now,
                             "position_duration_s": round(position_duration),
                             "min_gap_s": min_gap_seconds,
                         })
@@ -368,6 +379,14 @@ class AgentBrokerService:
                 new_side = "LONG" if opp_bullish else "SHORT"
                 if agent.balance <= 0:
                     logger.info(f"[{agent.name}] Balance is {agent.balance:.2f}, cannot open {new_side}")
+                    await self._log(db, agent.id, "TRADE_SKIPPED", {
+                        "side": new_side,
+                        "reason": "no_balance",
+                        "signal_time": opp_time.isoformat() if opp_time else None,
+                        "signal_price": opp_price,
+                        "entry_price": current_price_now,
+                        "balance": agent.balance,
+                    })
                     return
 
                 await self._open_position(db, agent, new_side, current_price_now, opp_id)
@@ -388,6 +407,13 @@ class AgentBrokerService:
 
                 # Staleness check (strict)
                 if await self._is_signal_stale(db, agent, signal_bar_index, signal_id, lenient=False):
+                    await self._log(db, agent.id, "TRADE_SKIPPED", {
+                        "side": "LONG" if is_bullish else "SHORT",
+                        "reason": "signal_stale",
+                        "signal_time": signal_time.isoformat() if signal_time else None,
+                        "signal_price": signal_price,
+                        "entry_price": current_price,
+                    })
                     return
 
                 # Already processed?
@@ -399,6 +425,14 @@ class AgentBrokerService:
                 new_side = "LONG" if is_bullish else "SHORT"
                 if agent.balance <= 0:
                     logger.info(f"[{agent.name}] Balance is {agent.balance:.2f}, cannot open position")
+                    await self._log(db, agent.id, "TRADE_SKIPPED", {
+                        "side": new_side,
+                        "reason": "no_balance",
+                        "signal_time": signal_time.isoformat() if signal_time else None,
+                        "signal_price": signal_price,
+                        "entry_price": current_price,
+                        "balance": agent.balance,
+                    })
                     return
 
                 await self._open_position(db, agent, new_side, current_price, signal_id)
@@ -1249,6 +1283,13 @@ class AgentBrokerService:
             side, current_price, pivot_price, atr, agent.timeframe, zone_tp=zone_tp
         )
 
+        # Retrieve signal time for skip logging
+        sig_time_row = await db.execute(
+            text("SELECT time FROM signals WHERE id = :sid"), {"sid": signal_id}
+        )
+        _sig_time_val = sig_time_row.scalar()
+        _signal_time_iso = _sig_time_val.isoformat() if _sig_time_val else None
+
         # ── Minimum risk filter ──
         # Skip trades where the SL is too close to entry (opposite reversals
         # too close in price → impossible to profit)
@@ -1256,6 +1297,7 @@ class AgentBrokerService:
             await self._log(db, agent.id, "TRADE_SKIPPED", {
                 "side": side,
                 "reason": "risk_too_small",
+                "signal_time": _signal_time_iso,
                 "entry_price": current_price,
                 "stop_loss": sl,
                 "risk_pct": round(abs(current_price - sl) / current_price * 100, 4),
@@ -1270,6 +1312,7 @@ class AgentBrokerService:
             await self._log(db, agent.id, "TRADE_SKIPPED", {
                 "side": side,
                 "reason": "pivot_momentum_against",
+                "signal_time": _signal_time_iso,
                 "entry_price": current_price,
             })
             return
@@ -1282,6 +1325,7 @@ class AgentBrokerService:
             await self._log(db, agent.id, "TRADE_SKIPPED", {
                 "side": side,
                 "reason": "htf_trend_against",
+                "signal_time": _signal_time_iso,
                 "entry_price": current_price,
                 "htf_checked": HTF_MAP.get(agent.timeframe, []),
             })
@@ -1294,6 +1338,7 @@ class AgentBrokerService:
             await self._log(db, agent.id, "TRADE_SKIPPED", {
                 "side": side,
                 "reason": "ema_trend_against",
+                "signal_time": _signal_time_iso,
                 "entry_price": current_price,
             })
             return

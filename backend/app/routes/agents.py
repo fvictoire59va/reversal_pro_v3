@@ -562,3 +562,71 @@ async def get_positions_for_chart(
         })
     
     return {"positions": positions}
+
+
+# ── Skipped Signals (for chart grey markers) ────────────────
+
+@router.get("/skipped-signals/{symbol}/{timeframe}")
+async def get_skipped_signals_for_chart(
+    symbol: str,
+    timeframe: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get all TRADE_SKIPPED logs for a specific symbol/timeframe (for chart grey markers).
+    
+    Returns skipped signal details so the frontend can render grey markers
+    with tooltips explaining why the position was not taken.
+    """
+    from sqlalchemy import text
+
+    # Normalize symbol format (BTC-USDT -> BTC/USDT)
+    symbol_normalized = symbol.replace("-", "/")
+
+    result = await db.execute(text("""
+        SELECT l.id, l.agent_id, a.name as agent_name,
+               l.details, l.created_at
+        FROM agent_logs l
+        JOIN agents a ON l.agent_id = a.id
+        WHERE l.action = 'TRADE_SKIPPED'
+          AND a.symbol = :symbol
+          AND a.timeframe = :timeframe
+          AND l.details->>'signal_time' IS NOT NULL
+        ORDER BY l.created_at DESC
+        LIMIT 100
+    """), {"symbol": symbol_normalized, "timeframe": timeframe})
+
+    skipped = []
+    seen_keys = set()  # Deduplicate by (signal_time, side, agent_id)
+    for row in result.fetchall():
+        details = row[3] or {}
+        signal_time = details.get("signal_time")
+        side = details.get("side")
+        agent_id = row[1]
+        
+        if not signal_time:
+            continue
+            
+        # Deduplicate: keep only the latest skip per (signal_time, side, agent)
+        dedup_key = (signal_time, side, agent_id)
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
+
+        skipped.append({
+            "agent_name": row[2],
+            "agent_id": agent_id,
+            "side": side,
+            "reason": details.get("reason", "unknown"),
+            "signal_time": signal_time,
+            "signal_price": details.get("signal_price"),
+            "entry_price": details.get("entry_price"),
+            "stop_loss": details.get("stop_loss"),
+            "risk_pct": details.get("risk_pct"),
+            "htf_checked": details.get("htf_checked"),
+            "balance": details.get("balance"),
+            "position_duration_s": details.get("position_duration_s"),
+            "min_gap_s": details.get("min_gap_s"),
+            "skipped_at": row[4].isoformat() if row[4] else None,
+        })
+
+    return {"skipped_signals": skipped}

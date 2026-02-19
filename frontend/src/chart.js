@@ -31,8 +31,10 @@ export class ChartManager {
         this.agentZoneSeries = [];    // TP/SL colored zone series
         this.signalMarkers = [];      // Reversal signal markers (from analysis)
         this.agentMarkers = [];       // Agent position entry markers
+        this.skippedMarkers = [];     // Skipped signal markers (grey)
         this.signalMeta = {};         // Signal metadata keyed by Paris-shifted time
         this.agentMeta = {};          // Agent marker metadata keyed by Paris-shifted time
+        this.skippedMeta = {};        // Skipped signal metadata keyed by Paris-shifted time
         this.lastCandleTime = null;   // Last candle time (Paris-shifted)
         
         // Position Tool state
@@ -148,20 +150,24 @@ export class ChartManager {
         // ── Signal tooltip on crosshair move ──
         this._tooltipEl = document.getElementById('signalTooltip');
         this._agentTooltipEl = document.getElementById('agentTooltip');
+        this._skippedTooltipEl = document.getElementById('skippedTooltip');
         this.chart.subscribeCrosshairMove(param => this._handleCrosshairMove(param));
     }
 
     /**
      * Show/hide the signal detection tooltip when crosshair is on a signal candle.
      * Also shows agent position tooltip when crosshair is on an agent marker.
+     * Also shows skipped signal tooltip when crosshair is on a grey skipped marker.
      */
     _handleCrosshairMove(param) {
         const tooltip = this._tooltipEl;
         const agentTooltip = this._agentTooltipEl;
+        const skippedTooltip = this._skippedTooltipEl;
 
         if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
             if (tooltip) tooltip.style.display = 'none';
             if (agentTooltip) agentTooltip.style.display = 'none';
+            if (skippedTooltip) skippedTooltip.style.display = 'none';
             return;
         }
 
@@ -169,6 +175,7 @@ export class ChartManager {
         const agentMetaList = this.agentMeta[param.time];
         if (agentMetaList && agentMetaList.length > 0 && agentTooltip) {
             if (tooltip) tooltip.style.display = 'none';
+            if (skippedTooltip) skippedTooltip.style.display = 'none';
 
             const headerEl = document.getElementById('agentTooltipHeader');
             const bodyEl = document.getElementById('agentTooltipBody');
@@ -194,6 +201,33 @@ export class ChartManager {
         }
 
         if (agentTooltip) agentTooltip.style.display = 'none';
+
+        // ── Skipped signal tooltip ──
+        const skippedMetaList = this.skippedMeta[param.time];
+        if (skippedMetaList && skippedMetaList.length > 0 && skippedTooltip) {
+            if (tooltip) tooltip.style.display = 'none';
+
+            const headerEl = document.getElementById('skippedTooltipHeader');
+            const bodyEl = document.getElementById('skippedTooltipBody');
+
+            let html = '';
+            for (const meta of skippedMetaList) {
+                html += this._buildSkippedTooltipHTML(meta);
+            }
+
+            const count = skippedMetaList.length;
+            headerEl.textContent = count === 1
+                ? `⊘ Signal ignoré`
+                : `⊘ ${count} signaux ignorés`;
+            headerEl.style.color = '#888888';
+            bodyEl.innerHTML = html;
+
+            this._positionTooltip(skippedTooltip, param);
+            skippedTooltip.style.display = 'block';
+            return;
+        }
+
+        if (skippedTooltip) skippedTooltip.style.display = 'none';
 
         // ── Signal tooltip ──
         if (!tooltip) return;
@@ -356,6 +390,66 @@ export class ChartManager {
     }
 
     /**
+     * Build tooltip HTML for a SKIPPED signal marker.
+     */
+    _buildSkippedTooltipHTML(meta) {
+        const reasonLabels = {
+            'risk_too_small': 'Risque trop faible',
+            'pivot_momentum_against': 'Momentum pivot contraire',
+            'htf_trend_against': 'Tendance HTF contraire',
+            'ema_trend_against': 'Tendance EMA contraire',
+            'signal_stale': 'Signal obsolète',
+            'no_balance': 'Solde insuffisant',
+            'whipsaw_cooldown': 'Cooldown anti-whipsaw',
+        };
+
+        const reasonDescriptions = {
+            'risk_too_small': 'Le SL est trop proche du prix d\'entrée, rendant le trade non rentable.',
+            'pivot_momentum_against': 'Les 3 derniers pivots indiquent un momentum contraire à la direction du signal.',
+            'htf_trend_against': 'La tendance sur le timeframe supérieur est opposée au signal.',
+            'ema_trend_against': 'La tendance EMA sur le timeframe actuel est opposée au signal.',
+            'signal_stale': 'Le signal est trop ancien par rapport à la bougie actuelle.',
+            'no_balance': 'L\'agent n\'a plus de capital disponible pour ouvrir une position.',
+            'whipsaw_cooldown': 'La position précédente a été trop courte, cooldown actif pour éviter le whipsaw.',
+        };
+
+        const sideColor = meta.side === 'LONG' ? '#0088dd' : '#dd8800';
+        const sideIcon = meta.side === 'LONG' ? '▲' : '▼';
+        const reasonText = reasonLabels[meta.reason] || meta.reason || 'Inconnue';
+        const reasonDesc = reasonDescriptions[meta.reason] || '';
+
+        let html = `<div class="tooltip-section">`;
+        html += `<div style="color:${sideColor}; font-weight:700; font-size:12px; margin-bottom:4px;">${sideIcon} ${meta.side}</div>`;
+        html += `<span class="tooltip-reason reason-skipped">${reasonText}</span>`;
+        if (reasonDesc) {
+            html += `<div class="tooltip-reason-desc">${reasonDesc}</div>`;
+        }
+        html += this._tooltipRow('Agent', meta.agentName);
+        if (meta.entryPrice != null) html += this._tooltipRow('Prix', `${meta.entryPrice.toFixed(2)}`);
+        if (meta.stopLoss != null) html += this._tooltipRow('SL calculé', `${meta.stopLoss.toFixed(2)}`);
+        if (meta.riskPct != null) html += this._tooltipRow('Risque', `${meta.riskPct.toFixed(4)}%`);
+        if (meta.htfChecked && meta.htfChecked.length > 0) html += this._tooltipRow('HTF vérifiés', meta.htfChecked.join(', '));
+        if (meta.balance != null) html += this._tooltipRow('Solde', `${meta.balance.toFixed(2)}€`);
+        if (meta.positionDurationS != null) {
+            const mins = Math.floor(meta.positionDurationS / 60);
+            const secs = meta.positionDurationS % 60;
+            html += this._tooltipRow('Durée pos.', mins > 0 ? `${mins}m ${secs}s` : `${secs}s`);
+        }
+        if (meta.minGapS != null) {
+            html += this._tooltipRow('Cooldown min.', `${Math.floor(meta.minGapS / 60)}m`);
+        }
+        if (meta.skippedAt) {
+            const dt = new Date(meta.skippedAt);
+            html += this._tooltipRow('Ignoré le', dt.toLocaleString('fr-FR', {
+                timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+            }));
+        }
+        html += `</div>`;
+        return html;
+    }
+
+    /**
      * Load complete chart data from the API response.
      */
     setData(data) {
@@ -393,6 +487,8 @@ export class ChartManager {
         // Markers (reversal signals) — store separately for agent overlay
         this.signalMarkers = data.markers?.length ? data.markers.map(shiftTime) : [];
         this.agentMarkers = []; // Reset agent markers when new data loads
+        this.skippedMarkers = []; // Reset skipped markers when new data loads
+        this.skippedMeta = {};    // Reset skipped metadata
 
         // Build signal metadata map keyed by Paris-shifted time
         this.signalMeta = {};
@@ -639,6 +735,83 @@ export class ChartManager {
     }
 
     /**
+     * Display skipped signals on the chart as grey markers.
+     * @param {Array} skippedSignals - Array of skipped signal data from the API
+     */
+    showSkippedSignals(skippedSignals) {
+        // Save current visible range to prevent zoom/spacing changes
+        const timeScale = this.chart.timeScale();
+        const savedRange = timeScale.getVisibleLogicalRange();
+
+        this.skippedMarkers = [];
+        this.skippedMeta = {};
+
+        if (!skippedSignals || skippedSignals.length === 0) {
+            // Re-merge markers without skipped
+            this._mergeAndSetMarkers();
+            if (savedRange) timeScale.setVisibleLogicalRange(savedRange);
+            return;
+        }
+
+        for (const skip of skippedSignals) {
+            if (!skip.signal_time) continue;
+
+            // Parse signal_time to Unix timestamp
+            const signalDate = new Date(skip.signal_time);
+            const rawTs = Math.floor(signalDate.getTime() / 1000);
+            const parisTs = utcToParisTimestamp(rawTs);
+            const snapTs = this._snapToCandleTime(parisTs);
+
+            const isLong = skip.side === 'LONG';
+
+            this.skippedMarkers.push({
+                time: snapTs,
+                position: isLong ? 'belowBar' : 'aboveBar',
+                color: '#888888',
+                shape: 'circle',
+                text: `⊘ ${skip.side}`,
+                size: 1,
+            });
+
+            // Store metadata for tooltip
+            if (!this.skippedMeta[snapTs]) this.skippedMeta[snapTs] = [];
+            this.skippedMeta[snapTs].push({
+                agentName: skip.agent_name,
+                side: skip.side,
+                reason: skip.reason,
+                entryPrice: skip.entry_price,
+                signalPrice: skip.signal_price,
+                stopLoss: skip.stop_loss,
+                riskPct: skip.risk_pct,
+                htfChecked: skip.htf_checked,
+                balance: skip.balance,
+                positionDurationS: skip.position_duration_s,
+                minGapS: skip.min_gap_s,
+                skippedAt: skip.skipped_at,
+            });
+        }
+
+        // Merge all markers and set
+        this._mergeAndSetMarkers();
+
+        // Restore zoom
+        if (savedRange) timeScale.setVisibleLogicalRange(savedRange);
+    }
+
+    /**
+     * Merge signal, agent, and skipped markers and set on the candle series.
+     * Markers must be sorted by time (required by lightweight-charts).
+     */
+    _mergeAndSetMarkers() {
+        const allMarkers = [
+            ...this.signalMarkers,
+            ...this.agentMarkers,
+            ...this.skippedMarkers,
+        ].sort((a, b) => a.time - b.time);
+        this.candleSeries.setMarkers(allMarkers);
+    }
+
+    /**
      * Display agent positions on the chart
      * @param {Array} positions - Array of agent positions
      */
@@ -663,8 +836,8 @@ export class ChartManager {
         this.agentMeta = {};  // Reset agent metadata
 
         if (!positions || positions.length === 0) {
-            // Restore signal-only markers
-            this.candleSeries.setMarkers([...this.signalMarkers]);
+            // Restore signal + skipped markers (no agent markers)
+            this._mergeAndSetMarkers();
             // Restore zoom
             if (savedRange) {
                 timeScale.setVisibleLogicalRange(savedRange);
@@ -948,10 +1121,8 @@ export class ChartManager {
             }
         });
 
-        // Combine signal markers + agent markers and set once (sorted by time)
-        const allMarkers = [...this.signalMarkers, ...this.agentMarkers]
-            .sort((a, b) => a.time - b.time);
-        this.candleSeries.setMarkers(allMarkers);
+        // Combine signal markers + agent markers + skipped markers and set once (sorted by time)
+        this._mergeAndSetMarkers();
 
         // Restore the saved zoom range to prevent spacing changes
         if (savedRange) {

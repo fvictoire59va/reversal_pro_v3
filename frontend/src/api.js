@@ -152,3 +152,10 @@ export async function getAgentPositionsForChart(symbol, timeframe) {
     if (!res.ok) return { positions: [] };
     return res.json();
 }
+
+export async function getSkippedSignalsForChart(symbol, timeframe) {
+    const urlSymbol = symbol.replace('/', '-');
+    const res = await fetch(`${API_BASE}/agents/skipped-signals/${urlSymbol}/${timeframe}`);
+    if (!res.ok) return { skipped_signals: [] };
+    return res.json();
+}

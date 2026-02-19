@@ -6,7 +6,7 @@ import { ChartManager } from './chart.js';
 import {
     fetchChartData, fetchFromExchange, uploadCSV,
     getAgentsOverview, createAgent, deleteAgent, toggleAgent, closePosition,
-    getAgentPositionsForChart, getAgentPerformance,
+    getAgentPositionsForChart, getAgentPerformance, getSkippedSignalsForChart,
 } from './api.js';
 
 // ── State ───────────────────────────────────────────────────
@@ -234,8 +234,12 @@ async function loadChart(retryOnFail = true) {
         
         // Load and display agent positions for this chart
         try {
-            const resp = await getAgentPositionsForChart(currentSymbol, currentTimeframe);
-            chart.showAgentPositions(resp.positions || []);
+            const [posResp, skipResp] = await Promise.all([
+                getAgentPositionsForChart(currentSymbol, currentTimeframe),
+                getSkippedSignalsForChart(currentSymbol, currentTimeframe),
+            ]);
+            chart.showAgentPositions(posResp.positions || []);
+            chart.showSkippedSignals(skipResp.skipped_signals || []);
         } catch (posErr) {
             console.warn('Could not load agent positions:', posErr);
         }

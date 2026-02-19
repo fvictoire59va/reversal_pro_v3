@@ -1,5 +1,5 @@
-# ── Build stage ──
-FROM node:20-alpine AS builder
+# ── Build stage (amd64 native — output is static files, platform-independent) ──
+FROM --platform=linux/amd64 node:20-alpine AS builder
 
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
@@ -7,7 +7,7 @@ RUN npm install
 COPY frontend/ .
 RUN npm run build
 
-# ── Production stage ──
+# ── Production stage (target platform: arm64) ──
 FROM nginx:alpine
 
 # Copy built assets

@@ -4,6 +4,7 @@
  */
 
 import { getAgentPerformance } from './api.js';
+import { esc } from './escapeHtml.js';
 
 // ── Private ─────────────────────────────────────────────────
 let perfTreeInterval = null;
@@ -40,7 +41,7 @@ export function updatePerfAgentSelect(agents) {
     const select = document.getElementById('perfAgentSelect');
     const currentVal = select.value;
     const options = '<option value="">— Agent —</option>' +
-        agents.map(a => `<option value="${a.id}">${a.name}</option>`).join('');
+        agents.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
     select.innerHTML = options;
     // Restore selection or auto-select if only one agent
     if (currentVal && agents.some(a => a.id === parseInt(currentVal))) {
@@ -82,8 +83,8 @@ function renderPerfTree(container, data) {
     html += `
         <div class="perf-summary">
             <div class="perf-summary-title">
-                🤖 ${agent.name}
-                <span style="font-size:9px;color:var(--text-muted)">${agent.symbol} · ${agent.timeframe} · ${agent.mode}</span>
+                🤖 ${esc(agent.name)}
+                <span style="font-size:9px;color:var(--text-muted)">${esc(agent.symbol)} · ${esc(agent.timeframe)} · ${esc(agent.mode)}</span>
             </div>
             <div class="perf-summary-pnl ${pnlColor}">${pnlSign}${summary.total_pnl.toFixed(2)}€</div>
             <div class="perf-summary-row">

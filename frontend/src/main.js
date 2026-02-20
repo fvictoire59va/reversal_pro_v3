@@ -13,6 +13,7 @@ import {
     fetchChartData, fetchFromExchange, uploadCSV,
     getAgentPositionsForChart, getSkippedSignalsForChart,
 } from './api.js';
+import { esc } from './escapeHtml.js';
 import { state, dom, showLoading, setStatus } from './state.js';
 import { checkNewSignals } from './notifications.js';
 import { initAgentBroker } from './agentPanel.js';
@@ -148,7 +149,7 @@ function showChartError(message) {
     }
     overlay.innerHTML = `
         <div style="font-size: 36px;">⚠️</div>
-        <div style="font-size: 14px; color: #606873; max-width: 300px;">${message}</div>
+        <div style="font-size: 14px; color: #606873; max-width: 300px;">${esc(message)}</div>
         <button onclick="this.parentElement.remove(); loadChart()" 
                 style="padding: 6px 16px; border: 1px solid #00aa55; background: #00aa55; 
                        color: white; border-radius: 4px; cursor: pointer; font-size: 12px;">

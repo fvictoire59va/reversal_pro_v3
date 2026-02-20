@@ -9,6 +9,7 @@ import {
     closePosition, getAgentPositionsForChart,
 } from './api.js';
 import { updatePerfAgentSelect } from './perfTree.js';
+import { esc, escAttr } from './escapeHtml.js';
 
 // ── Private ─────────────────────────────────────────────────
 let agentRefreshInterval = null;
@@ -197,15 +198,15 @@ function renderAgentsList(agents, openPositions = []) {
             <div class="agent-card ${cardClass}">
                 <div class="agent-card-header">
                     <span class="agent-status-dot ${statusClass}"></span>
-                    <span class="agent-name">${agent.name}</span>
+                    <span class="agent-name">${esc(agent.name)}</span>
                     <span class="agent-mode-badge ${modeClass}">${modeLabel}</span>
                     <div class="agent-actions">
                         <button onclick="window._handleToggleAgent(${agent.id})" title="${toggleTitle}">${toggleLabel}</button>
-                        <button class="btn-delete" onclick="window._handleDeleteAgent(${agent.id}, '${agent.name}')" title="Supprimer">✕</button>
+                        <button class="btn-delete" onclick="window._handleDeleteAgent(${agent.id}, '${escAttr(agent.name)}')" title="Supprimer">✕</button>
                     </div>
                 </div>
                 <div class="agent-card-details">
-                    <span class="agent-info">${agent.symbol} ${agent.timeframe}</span>
+                    <span class="agent-info">${esc(agent.symbol)} ${esc(agent.timeframe)}</span>
                     <span class="agent-info">${agent.trade_amount}€</span>
                     <span class="agent-info">Solde: ${(agent.balance || 0).toFixed(2)}€</span>
                 </div>
@@ -305,9 +306,9 @@ function renderPositionsTable(positions) {
 
         return `
             <tr>
-                <td>${pos.agent_name}</td>
+                <td>${esc(pos.agent_name)}</td>
                 <td class="${sideClass}">${sideIcon} ${pos.side}</td>
-                <td>${pos.symbol}</td>
+                <td>${esc(pos.symbol)}</td>
                 <td>${pos.entry_price.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}</td>
                 <td>${curPrice}</td>
                 <td style="color:var(--red)">${pos.stop_loss.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}${isBreakeven ? '<br/><small>🛡 BE</small>' : ''}</td>

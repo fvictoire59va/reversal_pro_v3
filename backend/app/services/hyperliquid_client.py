@@ -26,6 +26,11 @@ MAX_RETRIES = 5
 BASE_DELAY = 1.0  # seconds
 MAX_DELAY = 30.0  # seconds
 
+# EUR/USDT rate cache (TTL-based)
+_eur_usdt_rate_cache: Optional[float] = None
+_eur_usdt_rate_ts: float = 0.0
+_EUR_USDT_CACHE_TTL = 60.0  # seconds
+
 
 @dataclass
 class OrderResult:
@@ -100,7 +105,13 @@ class HyperliquidClient:
 
     # ── EUR → USDT conversion ────────────────────────────────
     async def get_eur_usdt_rate(self) -> float:
-        """Get current EUR/USDT exchange rate. Falls back to fixed rate."""
+        """Get current EUR/USDT exchange rate. Cached for 60s. Falls back to fixed rate."""
+        global _eur_usdt_rate_cache, _eur_usdt_rate_ts
+
+        now = time.monotonic()
+        if _eur_usdt_rate_cache is not None and (now - _eur_usdt_rate_ts) < _EUR_USDT_CACHE_TTL:
+            return _eur_usdt_rate_cache
+
         try:
             client = await self._get_client()
             resp = await client.get(
@@ -111,10 +122,14 @@ class HyperliquidClient:
                 data = resp.json()
                 eur_per_usdt = data.get("tether", {}).get("eur", 0.92)
                 rate = 1.0 / eur_per_usdt if eur_per_usdt > 0 else 1.09
-                logger.info(f"EUR/USDT rate: {rate:.4f}")
+                logger.info(f"EUR/USDT rate: {rate:.4f} (cached for {_EUR_USDT_CACHE_TTL}s)")
+                _eur_usdt_rate_cache = rate
+                _eur_usdt_rate_ts = now
                 return rate
         except Exception as e:
-            logger.warning(f"Failed to fetch EUR/USDT rate: {e}, using fallback")
+            logger.warning(f"Failed to fetch EUR/USDT rate: {e}, using {'cached' if _eur_usdt_rate_cache else 'fallback'}")
+            if _eur_usdt_rate_cache is not None:
+                return _eur_usdt_rate_cache
         return 1.09  # Fallback fixed rate
 
     async def convert_eur_to_usdt(self, eur_amount: float) -> float:

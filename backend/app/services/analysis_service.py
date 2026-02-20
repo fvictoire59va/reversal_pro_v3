@@ -372,30 +372,20 @@ class AnalysisService:
             await db.commit()
 
     async def _persist_signals(self, db, bars_data, result, request):
-        """Store detected signals, preserving original detected_at for known signals."""
-        if not result.signals:
-            return
+        """Store detected signals using UPSERT to avoid race conditions.
 
-        # 1. Load existing detected_at timestamps for this symbol/timeframe
-        existing = await db.execute(text(
-            "SELECT time, is_bullish, detected_at FROM signals "
-            "WHERE symbol = :s AND timeframe = :tf"
-        ), {"s": request.symbol, "tf": request.timeframe})
-        existing_map = {}
-        for row in existing.fetchall():
-            existing_map[(row[0], row[1])] = row[2]
+        Instead of DELETE + re-INSERT (which creates a window where agents
+        see zero signals), we:
+          1. Build the new set of signal values.
+          2. UPSERT via ON CONFLICT on the unique index
+             (time, symbol, timeframe, is_bullish).
+          3. DELETE stale signals that are no longer in the analysis result.
 
-        # 2. Delete all current signals
-        await db.execute(text(
-            "DELETE FROM signals WHERE symbol = :s AND timeframe = :tf"
-        ), {"s": request.symbol, "tf": request.timeframe})
-
-        # 3. Re-insert with preserved or new detected_at
+        This guarantees that readers always see a consistent set of signals.
+        """
         now = datetime.now(timezone.utc)
 
-        # Compute the time of the last candle and candle interval
-        # to determine which signals are actually "recent" vs "ghost" signals
-        # that appeared because the sliding window shifted.
+        # Compute candle interval and recent cutoff
         last_bar_time = datetime.fromisoformat(bars_data[-1]["time"])
         if len(bars_data) >= 2:
             candle_seconds = (
@@ -404,36 +394,39 @@ class AnalysisService:
             ).total_seconds()
         else:
             candle_seconds = 60
-        # A signal is only considered "truly new" if it occurred within
-        # the last 10 candles. Older signals entering the window are
-        # stored with detected_at = signal_time (they are historical).
         recent_cutoff = last_bar_time - timedelta(seconds=candle_seconds * 10)
+
+        # 1. Load existing detected_at timestamps for this symbol/timeframe
+        existing = await db.execute(text(
+            "SELECT time, is_bullish, detected_at FROM signals "
+            "WHERE symbol = :s AND timeframe = :tf"
+        ), {"s": request.symbol, "tf": request.timeframe})
+        existing_map = {}
+        for row in existing.fetchall():
+            key = (row[0].replace(tzinfo=None) if row[0].tzinfo else row[0], row[1])
+            existing_map[key] = row[2]
+
+        # 2. Build upsert values list and track which signal keys we keep
+        upsert_values = []
+        kept_keys = set()  # (sig_time, is_bullish) for delete-stale step
 
         for sig in result.signals:
             if sig.bar_index >= len(bars_data):
                 continue
             sig_time = datetime.fromisoformat(bars_data[sig.bar_index]["time"])
-
-            # Normalize both to naive UTC for reliable comparison
             sig_time_naive = sig_time.replace(tzinfo=None) if sig_time.tzinfo else sig_time
 
+            key = (sig_time_naive, sig.is_bullish)
+            kept_keys.add(key)
+
             # Reuse original detected_at if the signal was already known
-            # Use naive comparison to avoid tz-aware vs tz-naive mismatch
-            original_detected = None
-            for (etime, ebull), edet in existing_map.items():
-                etime_naive = etime.replace(tzinfo=None) if hasattr(etime, 'tzinfo') and etime.tzinfo else etime
-                if etime_naive == sig_time_naive and ebull == sig.is_bullish:
-                    original_detected = edet
-                    break
+            original_detected = existing_map.get(key)
 
             if not original_detected:
-                # Determine if this is a truly recent new signal
-                # or a ghost signal from the sliding window shifting
                 cutoff_naive = recent_cutoff.replace(tzinfo=None) if recent_cutoff.tzinfo else recent_cutoff
                 if sig_time_naive >= cutoff_naive:
                     detected_at = now
                 else:
-                    # Old signal entering window — set detected_at = signal time
                     detected_at = sig_time
                     logger.debug(
                         f"Ghost signal ignored: {sig_time} {'LONG' if sig.is_bullish else 'SHORT'} "
@@ -442,19 +435,60 @@ class AnalysisService:
             else:
                 detected_at = original_detected
 
-            s = Signal(
-                time=sig_time,
-                symbol=request.symbol,
-                timeframe=request.timeframe,
-                bar_index=sig.bar_index,
-                price=sig.price,
-                actual_price=sig.actual_price,
-                is_bullish=sig.is_bullish,
-                is_preview=sig.is_preview,
-                signal_label=sig.label,
-                detected_at=detected_at,
+            upsert_values.append({
+                "time": sig_time,
+                "symbol": request.symbol,
+                "timeframe": request.timeframe,
+                "bar_index": sig.bar_index,
+                "price": sig.price,
+                "actual_price": sig.actual_price,
+                "is_bullish": sig.is_bullish,
+                "is_preview": sig.is_preview,
+                "signal_label": sig.label,
+                "detected_at": detected_at,
+            })
+
+        # 3. Upsert signals in batch
+        if upsert_values:
+            stmt = pg_insert(Signal).values(upsert_values)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["time", "symbol", "timeframe", "is_bullish"],
+                set_={
+                    "bar_index": stmt.excluded.bar_index,
+                    "price": stmt.excluded.price,
+                    "actual_price": stmt.excluded.actual_price,
+                    "is_preview": stmt.excluded.is_preview,
+                    "signal_label": stmt.excluded.signal_label,
+                    # detected_at is preserved — use COALESCE to keep existing value
+                    "detected_at": text(
+                        "COALESCE(signals.detected_at, EXCLUDED.detected_at)"
+                    ),
+                },
             )
-            db.add(s)
+            await db.execute(stmt)
+
+        # 4. Delete stale signals no longer in the analysis result
+        #    Build a list of (time, is_bullish) pairs to keep
+        if result.signals:
+            # Delete signals for this symbol/timeframe that were NOT in the new result
+            all_existing = await db.execute(text(
+                "SELECT id, time, is_bullish FROM signals "
+                "WHERE symbol = :s AND timeframe = :tf"
+            ), {"s": request.symbol, "tf": request.timeframe})
+            ids_to_delete = []
+            for row in all_existing.fetchall():
+                row_time_naive = row[1].replace(tzinfo=None) if row[1].tzinfo else row[1]
+                if (row_time_naive, row[2]) not in kept_keys:
+                    ids_to_delete.append(row[0])
+            if ids_to_delete:
+                await db.execute(text(
+                    "DELETE FROM signals WHERE id = ANY(:ids)"
+                ), {"ids": ids_to_delete})
+        else:
+            # No signals in result — remove all for this pair
+            await db.execute(text(
+                "DELETE FROM signals WHERE symbol = :s AND timeframe = :tf"
+            ), {"s": request.symbol, "tf": request.timeframe})
 
         await db.commit()
 

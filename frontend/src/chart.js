@@ -3,7 +3,7 @@
  * Renders candlesticks, EMAs, supply/demand zones, and reversal markers.
  */
 
-import { createChart, CrosshairMode, LineStyle } from 'lightweight-charts';
+import { createChart, CrosshairMode, LineStyle } from 'lightweight-charts';\nimport { esc } from './escapeHtml.js';
 
 /**
  * Shift a UTC Unix timestamp (seconds) so lightweight-charts displays it as Paris time.
@@ -346,14 +346,14 @@ export class ChartManager {
             'SIGNAL': 'reason-signal',
         };
 
-        const reasonText = reasonLabels[meta.closeReason] || meta.closeReason || 'Inconnue';
+        const reasonText = reasonLabels[meta.closeReason] || esc(meta.closeReason) || 'Inconnue';
         const reasonClass = reasonClasses[meta.closeReason] || 'reason-manual';
 
         const pnlClass = meta.pnl > 0 ? 'tooltip-pnl-positive' : 'tooltip-pnl-negative';
         const pnlSign = meta.pnl > 0 ? '+' : '';
 
         let html = `<div class="tooltip-section">`;
-        html += `<span class="tooltip-reason ${reasonClass}">${reasonText}</span>`;
+        html += `<span class="tooltip-reason ${reasonClass}">${esc(reasonText)}</span>`;
         html += this._tooltipRow('Entrée', `${meta.entryPrice?.toFixed(2)}`);
         html += this._tooltipRow('Sortie', `${meta.exitPrice?.toFixed(2)}`);
         if (meta.pnl != null) {
@@ -386,8 +386,8 @@ export class ChartManager {
      */
     _tooltipRow(label, value) {
         return `<div class="signal-tooltip-row">
-            <span class="signal-tooltip-label">${label} :</span>
-            <span class="signal-tooltip-value">${value}</span>
+            <span class="signal-tooltip-label">${esc(label)} :</span>
+            <span class="signal-tooltip-value">${esc(value)}</span>
         </div>`;
     }
 

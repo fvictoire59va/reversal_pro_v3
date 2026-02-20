@@ -33,7 +33,7 @@ class SupplyDemandService:
 
             zone_type = ZoneType.SUPPLY if pivot.is_high else ZoneType.DEMAND
             center = pivot.actual_price
-            half = (center * self.zone_thickness_pct / 100.0) / 2.0
+            half = (center * self.zone_thickness_pct) / 2.0
 
             zone = SupplyDemandZone(
                 zone_type=zone_type,

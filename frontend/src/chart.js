@@ -327,6 +327,7 @@ export class ChartManager {
     _buildExitTooltipHTML(meta) {
         const reasonLabels = {
             'STOP_LOSS': 'Stop Loss',
+            'TRAILING_STOP': 'Trailing Stop',
             'TAKE_PROFIT': 'Take Profit',
             'TAKE_PROFIT_2': 'Take Profit 2',
             'BULLISH_REVERSAL': 'Reversal Bullish',
@@ -338,6 +339,7 @@ export class ChartManager {
 
         const reasonClasses = {
             'STOP_LOSS': 'reason-sl',
+            'TRAILING_STOP': 'reason-ts',
             'TAKE_PROFIT': 'reason-tp',
             'TAKE_PROFIT_2': 'reason-tp',
             'BULLISH_REVERSAL': 'reason-signal',
@@ -1106,10 +1108,11 @@ export class ChartManager {
                         utcToParisTimestamp(Math.floor(new Date(pos.closed_at).getTime() / 1000))
                     );
                     const isStopped = pos.status === 'STOPPED';
+                    const isTrailingStop = pos.close_reason === 'TRAILING_STOP';
                     const isWin = pos.pnl > 0;
                     const pnlStr = pos.pnl != null ? (pos.pnl > 0 ? '+' : '') + pos.pnl.toFixed(2) : '';
-                    // Label: SL if stopped, TP if profitable close, EXIT if closed at a loss
-                    const exitLabel = isStopped ? 'SL' : (isWin ? 'TP' : 'EXIT');
+                    // Label: TS1 if trailing stop, SL if stopped, TP if profitable close, EXIT if closed at a loss
+                    const exitLabel = isTrailingStop ? 'TS' : (isStopped ? 'SL' : (isWin ? 'TP' : 'EXIT'));
                     this.agentMarkers.push({
                         time: exitTs,
                         position: isLong ? 'aboveBar' : 'belowBar',

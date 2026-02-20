@@ -235,7 +235,7 @@ class PositionManagerMixin:
         pos.exit_price = actual_exit
         pos.pnl = round(total_pnl_eur, 4)
         pos.pnl_percent = round(pnl_pct, 2)
-        pos.status = "STOPPED" if reason == "STOP_LOSS" else "CLOSED"
+        pos.status = "STOPPED" if reason in ("STOP_LOSS", "TRAILING_STOP") else "CLOSED"
         pos.exit_signal_id = exit_signal_id
         pos.closed_at = datetime.now(timezone.utc)
 

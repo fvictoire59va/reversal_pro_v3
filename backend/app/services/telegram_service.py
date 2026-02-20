@@ -135,6 +135,18 @@ class TelegramService:
         emoji = "✅" if pnl > 0 else "❌"
         mode_emoji = "📝" if mode == "paper" else "💰"
 
+        reason_labels = {
+            "STOP_LOSS": "Stop Loss",
+            "TRAILING_STOP": "Trailing Stop",
+            "TAKE_PROFIT": "Take Profit",
+            "TAKE_PROFIT_2": "Take Profit 2",
+            "PARTIAL_TP1": "TP1 Partiel (50%)",
+            "BULLISH_REVERSAL": "Reversal Bullish",
+            "BEARISH_REVERSAL": "Reversal Bearish",
+            "MANUAL_CLOSE": "Fermeture manuelle",
+        }
+        reason_display = reason_labels.get(reason, reason)
+
         text = (
             f"{emoji} *Position Closed* {mode_emoji}\n\n"
             f"*Agent:* `{agent_name}`\n"
@@ -143,7 +155,7 @@ class TelegramService:
             f"*Entry:* `{entry_price:.2f}`\n"
             f"*Exit:* `{exit_price:.2f}`\n"
             f"*PnL:* `{pnl:+.2f} ({pnl_percent:+.2f}%)`\n"
-            f"*Reason:* `{reason}`\n"
+            f"*Reason:* `{reason_display}`\n"
             f"*Mode:* `{mode.upper()}`"
         )
 

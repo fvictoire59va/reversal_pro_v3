@@ -515,6 +515,11 @@ body {
     color: #ff6b7a;
 }
 
+.agent-tooltip .tooltip-reason.reason-ts {
+    background: rgba(255, 170, 0, 0.2);
+    color: #ffcc44;
+}
+
 .agent-tooltip .tooltip-reason.reason-tp {
     background: rgba(0, 170, 85, 0.2);
     color: #44dd88;

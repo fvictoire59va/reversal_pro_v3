@@ -403,13 +403,23 @@ class RiskManagerMixin:
             realistic_exit = current_price
 
         if triggered:
+            # Distinguish trailing stop from original stop loss
+            original_sl = pos.original_stop_loss or pos.stop_loss
+            is_trailing = (
+                (pos.side == "LONG" and pos.stop_loss > original_sl)
+                or (pos.side == "SHORT" and pos.stop_loss < original_sl)
+            )
+            reason = "TRAILING_STOP" if is_trailing else "STOP_LOSS"
+            label = "TRAILING STOP" if is_trailing else "STOP LOSS"
+
             logger.info(
-                f"[{agent.name}] STOP LOSS triggered for {pos.side} "
+                f"[{agent.name}] {label} triggered for {pos.side} "
                 f"@ {current_price:.2f} (SL: {pos.stop_loss:.2f}, "
+                f"original SL: {original_sl:.2f}, "
                 f"Low: {low:.2f}, High: {high:.2f}, exit: {realistic_exit:.2f})"
             )
             await self._close_position_internal(
-                db, pos, exit_price=realistic_exit, reason="STOP_LOSS"
+                db, pos, exit_price=realistic_exit, reason=reason
             )
             return True
 

@@ -3,7 +3,8 @@
  * Renders candlesticks, EMAs, supply/demand zones, and reversal markers.
  */
 
-import { createChart, CrosshairMode, LineStyle } from 'lightweight-charts';\nimport { esc } from './escapeHtml.js';
+import { createChart, CrosshairMode, LineStyle } from 'lightweight-charts';
+import { esc } from './escapeHtml.js';
 
 /**
  * Shift a UTC Unix timestamp (seconds) so lightweight-charts displays it as Paris time.

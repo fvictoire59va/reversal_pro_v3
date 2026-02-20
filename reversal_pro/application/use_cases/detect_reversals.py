@@ -5,8 +5,12 @@ Orchestrates all services to produce a complete AnalysisResult.
 
 import numpy as np
 from typing import List, Optional
+import logging
 
-from ...domain.entities import AnalysisResult, ReversalSignal, Pivot, SupplyDemandZone
+from ...domain.entities import (
+    AnalysisResult, ReversalSignal, Pivot, SupplyDemandZone,
+    RegimeChangeSignal,
+)
 from ...domain.enums import (
     SignalMode,
     SensitivityPreset,
@@ -19,6 +23,7 @@ from ..services.ema_service import EMAService
 from ..services.zigzag_service import ZigZagService
 from ..services.reversal_detector import ReversalDetector
 from ..services.supply_demand_service import SupplyDemandService
+from ..services.matrix_profile_service import MatrixProfileService
 
 
 class DetectReversalsUseCase:
@@ -32,6 +37,7 @@ class DetectReversalsUseCase:
     4. Detect reversal signals from pivots
     5. Generate supply/demand zones
     6. Compute EMA trend
+    7. (Optional) Matrix Profile regime-change detection
     """
 
     def __init__(
@@ -55,6 +61,12 @@ class DetectReversalsUseCase:
         ema_slow: int = 21,
         # Timeframe for ATR scaling
         timeframe: str = "1h",
+        # Matrix Profile params (stumpy)
+        use_matrix_profile: bool = True,
+        mp_subsequence_length: Optional[int] = None,
+        mp_cac_threshold: float = 1.8,
+        mp_min_reduction: float = 0.40,
+        mp_score_decay_bars: int = 6,
     ):
         # Resolve sensitivity config (with timeframe-adaptive ATR scaling)
         if sensitivity == SensitivityPreset.CUSTOM:
@@ -78,6 +90,7 @@ class DetectReversalsUseCase:
         self.ema_mid = ema_mid
         self.ema_slow = ema_slow
         self.generate_zones_flag = generate_zones
+        self.use_matrix_profile = use_matrix_profile
 
         # Services
         self.atr_service = ATRService()
@@ -93,6 +106,21 @@ class DetectReversalsUseCase:
             zone_extension_bars=zone_extension_bars,
             max_zones=max_zones,
         )
+
+        # Matrix Profile service (lazy — only created when enabled)
+        self.mp_service: Optional[MatrixProfileService] = None
+        if self.use_matrix_profile:
+            try:
+                self.mp_service = MatrixProfileService(
+                    subsequence_length=mp_subsequence_length,
+                    z_threshold=mp_cac_threshold,
+                    min_reduction=mp_min_reduction,
+                    score_decay_bars=mp_score_decay_bars,
+                    timeframe=timeframe,
+                )
+            except Exception:
+                # stumpy not installed — graceful fallback
+                self.mp_service = None
 
     def execute(self, bars: List[OHLCVBar]) -> AnalysisResult:
         """
@@ -130,6 +158,46 @@ class DetectReversalsUseCase:
             )
             for i in range(n)
         ])
+
+        # ── Step 2b: Matrix Profile regime-change detection ──────────
+        # When enabled, this dynamically reduces reversal thresholds
+        # near detected regime changes, allowing the ZigZag to confirm
+        # pivots faster and thus reducing overall detection latency.
+        mp_result = None
+        regime_change_signals: List[RegimeChangeSignal] = []
+        mp_enabled = False
+
+        if self.mp_service is not None:
+            try:
+                mp_result = self.mp_service.analyze(closes)
+                mp_enabled = True
+
+                # Apply per-bar threshold reduction
+                reversal_amounts = reversal_amounts * mp_result.threshold_reduction
+
+                # Convert change points to early-warning signals.
+                # We infer direction from the local price trend around
+                # each change point: if closes are rising → bearish
+                # reversal likely (topping), falling → bullish.
+                lookback = max(3, self.mp_service.subsequence_length // 2)
+                for cp in mp_result.change_points:
+                    idx = cp.bar_index
+                    start = max(0, idx - lookback)
+                    if idx > start:
+                        direction = closes[idx] - closes[start]
+                        is_bullish = direction < 0  # was falling → reversal up
+                    else:
+                        is_bullish = None
+                    regime_change_signals.append(
+                        RegimeChangeSignal(
+                            bar_index=idx,
+                            score=cp.score,
+                            is_bullish=is_bullish,
+                        )
+                    )
+            except Exception:
+                # Gracefully fall back — the base pipeline still runs
+                pass
 
         # ── Step 3: ZigZag pivots ────────────────────────────────────
         confirmed_pivots: List[Pivot] = []
@@ -207,4 +275,6 @@ class DetectReversalsUseCase:
             current_atr=last_atr,
             current_threshold=last_threshold,
             atr_multiplier=self.sensitivity_config.atr_multiplier,
+            regime_change_signals=regime_change_signals,
+            mp_enabled=mp_enabled,
         )

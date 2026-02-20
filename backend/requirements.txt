@@ -14,3 +14,4 @@ httpx==0.27.0
 websockets==12.0
 apscheduler==3.10.4
 python-multipart==0.0.9
+stumpy>=1.12.0

@@ -96,6 +96,24 @@ class EMAState:
 
 
 @dataclass
+class RegimeChangeSignal:
+    """An early-warning signal from Matrix Profile regime-change detection."""
+    bar_index: int
+    score: float          # 0 → 1, higher = stronger regime change
+    is_bullish: Optional[bool] = None  # None if direction unknown yet
+
+    @property
+    def label(self) -> str:
+        return "EARLY_WARNING"
+
+    @property
+    def direction_text(self) -> str:
+        if self.is_bullish is None:
+            return "Unknown"
+        return "Bullish" if self.is_bullish else "Bearish"
+
+
+@dataclass
 class AnalysisResult:
     """Complete result of analyzing a set of bars."""
     signals: List[ReversalSignal] = field(default_factory=list)
@@ -106,3 +124,6 @@ class AnalysisResult:
     current_atr: float = 0.0
     current_threshold: float = 0.0
     atr_multiplier: float = 0.0
+    # Matrix Profile early-warning signals
+    regime_change_signals: List[RegimeChangeSignal] = field(default_factory=list)
+    mp_enabled: bool = False

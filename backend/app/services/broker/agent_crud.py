@@ -211,9 +211,9 @@ class AgentCrudMixin:
         """Get stats for ALL agents in a single query (avoids N+1)."""
         result = await db.execute(text("""
             SELECT agent_id,
-                   COUNT(*)    FILTER (WHERE status = 'OPEN')                         AS open_positions,
-                   COALESCE(SUM(pnl), 0) FILTER (WHERE status IN ('CLOSED','STOPPED')) AS total_pnl,
-                   COALESCE(SUM(unrealized_pnl), 0) FILTER (WHERE status = 'OPEN')     AS total_unrealized_pnl
+                   COUNT(*) FILTER (WHERE status = 'OPEN')                              AS open_positions,
+                   COALESCE(SUM(pnl) FILTER (WHERE status IN ('CLOSED','STOPPED')), 0)  AS total_pnl,
+                   COALESCE(SUM(unrealized_pnl) FILTER (WHERE status = 'OPEN'), 0)      AS total_unrealized_pnl
             FROM agent_positions
             GROUP BY agent_id
         """))

@@ -1,7 +1,7 @@
 """Domain entities for the Reversal Detection Pro system."""
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 from .enums import Direction, TrendState, ZoneType
 
@@ -98,10 +98,10 @@ class EMAState:
 @dataclass
 class AnalysisResult:
     """Complete result of analyzing a set of bars."""
-    signals: list = field(default_factory=list)         # List[ReversalSignal]
-    pivots: list = field(default_factory=list)           # List[Pivot]
-    zones: list = field(default_factory=list)            # List[SupplyDemandZone]
-    trend_history: list = field(default_factory=list)    # List[TrendInfo]
+    signals: List[ReversalSignal] = field(default_factory=list)
+    pivots: List[Pivot] = field(default_factory=list)
+    zones: List[SupplyDemandZone] = field(default_factory=list)
+    trend_history: List[TrendInfo] = field(default_factory=list)
     current_trend: Optional[TrendInfo] = None
     current_atr: float = 0.0
     current_threshold: float = 0.0

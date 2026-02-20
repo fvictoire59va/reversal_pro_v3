@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS zones (
 
 SELECT create_hypertable('zones', 'time', if_not_exists => TRUE);
 
+CREATE INDEX IF NOT EXISTS idx_zones_symbol_tf ON zones (symbol, timeframe, time DESC);
+
 -- ============================================================================
 -- Analysis Runs (metadata)
 -- ============================================================================
@@ -180,3 +182,11 @@ CREATE TABLE IF NOT EXISTS agent_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_agent ON agent_logs (agent_id, created_at DESC);
+
+-- ============================================================================
+-- Retention Policies (auto-drop old data)
+-- ============================================================================
+-- Keep OHLCV data for 1 year, signals/zones for 6 months
+SELECT add_retention_policy('ohlcv',   INTERVAL '1 year',   if_not_exists => TRUE);
+SELECT add_retention_policy('signals', INTERVAL '6 months', if_not_exists => TRUE);
+SELECT add_retention_policy('zones',   INTERVAL '6 months', if_not_exists => TRUE);

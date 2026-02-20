@@ -110,11 +110,9 @@ class DetectReversalsUseCase:
             return AnalysisResult()
 
         n = len(bars)
-        opens = np.array([b.open for b in bars], dtype=float)
         highs = np.array([b.high for b in bars], dtype=float)
         lows = np.array([b.low for b in bars], dtype=float)
         closes = np.array([b.close for b in bars], dtype=float)
-        volumes = np.array([b.volume for b in bars], dtype=float)
 
         # ── Step 1: ATR ──────────────────────────────────────────────
         atr_values = self.atr_service.atr(

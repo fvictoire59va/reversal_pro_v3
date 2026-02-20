@@ -63,20 +63,6 @@ export async function uploadCSV(file, symbol, timeframe) {
     return res.json();
 }
 
-export async function getWatchlist() {
-    const res = await fetch(`${API_BASE}/watchlist/`);
-    return res.json();
-}
-
-export async function addToWatchlist(item) {
-    const res = await fetch(`${API_BASE}/watchlist/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(item),
-    });
-    return res.json();
-}
-
 // ── Agent Broker API ────────────────────────────────────────
 
 export async function getAgentsOverview() {

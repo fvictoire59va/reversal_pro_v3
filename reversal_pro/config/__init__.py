@@ -51,22 +51,6 @@ class ZoneSettings:
 
 
 @dataclass
-class LabelSettings:
-    """Label and line display settings."""
-    line_extension: int = 5
-    max_lines: int = 10
-    label_size: str = "Normal"  # Small, Normal, Large
-
-
-@dataclass
-class TableSettings:
-    """Info table display settings."""
-    show: bool = True
-    position: str = "Top Right"
-    size: str = "Normal"  # Tiny, Small, Normal, Large, Huge
-
-
-@dataclass
 class EMASettings:
     """Triple EMA parameters."""
     superfast_length: int = 9
@@ -94,8 +78,6 @@ class AppConfig:
     sensitivity: SensitivitySettings = field(default_factory=SensitivitySettings)
     advanced: AdvancedSettings = field(default_factory=AdvancedSettings)
     zones: ZoneSettings = field(default_factory=ZoneSettings)
-    labels: LabelSettings = field(default_factory=LabelSettings)
-    table: TableSettings = field(default_factory=TableSettings)
     ema: EMASettings = field(default_factory=EMASettings)
     data: DataSettings = field(default_factory=DataSettings)
 

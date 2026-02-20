@@ -343,9 +343,18 @@ async function handleCSVUpload(e) {
 }
 
 // ── Signal sound notification ───────────────────────────────
+let _bellAudioCtx = null;
+
 function playBellSound() {
     try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        if (!_bellAudioCtx || _bellAudioCtx.state === 'closed') {
+            _bellAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        // Resume if suspended (browser autoplay policy)
+        if (_bellAudioCtx.state === 'suspended') {
+            _bellAudioCtx.resume();
+        }
+        const ctx = _bellAudioCtx;
         const now = ctx.currentTime;
 
         // Bell-like tone: two short chimes
@@ -361,9 +370,6 @@ function playBellSound() {
             osc.start(now + offset);
             osc.stop(now + offset + 0.4);
         });
-
-        // Clean up context after sound finishes
-        setTimeout(() => ctx.close(), 1000);
     } catch (e) {
         console.warn('Could not play bell sound:', e);
     }

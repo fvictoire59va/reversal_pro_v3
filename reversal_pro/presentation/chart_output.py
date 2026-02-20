@@ -1,10 +1,50 @@
 """Chart output — generates a matplotlib chart with signals, zones, and EMAs."""
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from ..domain.entities import AnalysisResult, ReversalSignal, SupplyDemandZone
 from ..domain.enums import ZoneType, TrendState
 from ..domain.value_objects import OHLCVBar
+
+# ── Chart Theme ──────────────────────────────────────────────
+CHART_THEME: Dict[str, str | float | int] = {
+    # Background
+    "bg": "#1E1E1E",
+    # Candles
+    "candle_bull": "#00FF00",
+    "candle_bear": "#FF0000",
+    "candle_wick_width": 0.6,
+    "candle_body_width": 0.6,
+    "candle_edge_width": 0.5,
+    # EMAs
+    "ema_fast_color": "#FFD700",
+    "ema_mid_color": "#00BFFF",
+    "ema_slow_color": "#FF69B4",
+    "ema_width": 0.8,
+    "ema_alpha": 0.7,
+    # Zones
+    "supply_fill": "#FF000030",
+    "supply_edge": "#FF0000",
+    "demand_fill": "#00FF0030",
+    "demand_edge": "#00FF00",
+    "zone_edge_width": 0.8,
+    "zone_label_size": 7,
+    # Signals
+    "signal_font_size": 7,
+    "signal_line_width": 1.5,
+    "signal_extend_bars": 5,
+    "bull_offset_pct": 0.997,
+    "bear_offset_pct": 1.003,
+    # Axes & grid
+    "title_color": "#00FF00",
+    "title_size": 14,
+    "spine_color": "#444444",
+    "grid_color": "#333333",
+    "grid_width": 0.3,
+    "legend_bg": "#2A2A2A",
+    "legend_edge": "#444444",
+    "legend_size": 8,
+}
 
 
 def plot_chart(
@@ -38,49 +78,50 @@ def plot_chart(
     opens = [b.open for b in bars]
 
     fig, ax = plt.subplots(figsize=(18, 8))
-    fig.patch.set_facecolor("#1E1E1E")
-    ax.set_facecolor("#1E1E1E")
+    fig.patch.set_facecolor(CHART_THEME["bg"])
+    ax.set_facecolor(CHART_THEME["bg"])
 
     # ── Candlesticks ─────────────────────────────────────────────
     for i in range(n):
-        color = "#00FF00" if closes[i] >= opens[i] else "#FF0000"
+        color = CHART_THEME["candle_bull"] if closes[i] >= opens[i] else CHART_THEME["candle_bear"]
         # Wick
-        ax.plot([i, i], [lows[i], highs[i]], color=color, linewidth=0.6)
+        ax.plot([i, i], [lows[i], highs[i]], color=color, linewidth=CHART_THEME["candle_wick_width"])
         # Body
         body_bottom = min(opens[i], closes[i])
         body_height = abs(closes[i] - opens[i])
-        ax.bar(i, body_height, bottom=body_bottom, width=0.6,
-               color=color, edgecolor=color, linewidth=0.5)
+        ax.bar(i, body_height, bottom=body_bottom, width=CHART_THEME["candle_body_width"],
+               color=color, edgecolor=color, linewidth=CHART_THEME["candle_edge_width"])
 
     # ── EMAs ─────────────────────────────────────────────────────
     if result.trend_history:
         ema9 = [t.ema_fast for t in result.trend_history]
         ema14 = [t.ema_mid for t in result.trend_history]
         ema21 = [t.ema_slow for t in result.trend_history]
-        ax.plot(indices, ema9, color="#FFD700", linewidth=0.8, alpha=0.7, label="EMA 9")
-        ax.plot(indices, ema14, color="#00BFFF", linewidth=0.8, alpha=0.7, label="EMA 14")
-        ax.plot(indices, ema21, color="#FF69B4", linewidth=0.8, alpha=0.7, label="EMA 21")
+        ax.plot(indices, ema9, color=CHART_THEME["ema_fast_color"], linewidth=CHART_THEME["ema_width"], alpha=CHART_THEME["ema_alpha"], label="EMA 9")
+        ax.plot(indices, ema14, color=CHART_THEME["ema_mid_color"], linewidth=CHART_THEME["ema_width"], alpha=CHART_THEME["ema_alpha"], label="EMA 14")
+        ax.plot(indices, ema21, color=CHART_THEME["ema_slow_color"], linewidth=CHART_THEME["ema_width"], alpha=CHART_THEME["ema_alpha"], label="EMA 21")
 
     # ── Supply / Demand zones ────────────────────────────────────
     for zone in result.zones:
-        color = "#FF000030" if zone.zone_type == ZoneType.SUPPLY else "#00FF0030"
-        edge = "#FF0000" if zone.zone_type == ZoneType.SUPPLY else "#00FF00"
+        is_supply = zone.zone_type == ZoneType.SUPPLY
+        fill = CHART_THEME["supply_fill"] if is_supply else CHART_THEME["demand_fill"]
+        edge = CHART_THEME["supply_edge"] if is_supply else CHART_THEME["demand_edge"]
         width = min(zone.end_bar, n - 1) - zone.start_bar
         rect = mpatches.FancyBboxPatch(
             (zone.start_bar, zone.bottom_price),
             width,
             zone.top_price - zone.bottom_price,
             boxstyle="round,pad=0",
-            facecolor=color,
+            facecolor=fill,
             edgecolor=edge,
-            linewidth=0.8,
+            linewidth=CHART_THEME["zone_edge_width"],
         )
         ax.add_patch(rect)
         label_text = zone.zone_type.value
         mid = (zone.top_price + zone.bottom_price) / 2
         ax.text(
             zone.start_bar + width / 2, mid, label_text,
-            color=edge, fontsize=7, ha="center", va="center", alpha=0.7,
+            color=edge, fontsize=CHART_THEME["zone_label_size"], ha="center", va="center", alpha=0.7,
         )
 
     # ── Reversal signals ─────────────────────────────────────────
@@ -94,38 +135,38 @@ def plot_chart(
             ax.annotate(
                 f"▲ REVERSAL\n{sig.price:,.2f}",
                 xy=(sig.bar_index, sig.actual_price),
-                xytext=(sig.bar_index, sig.actual_price * 0.997),
-                fontsize=7, color="#00FF00", fontweight="bold",
+                xytext=(sig.bar_index, sig.actual_price * CHART_THEME["bull_offset_pct"]),
+                fontsize=CHART_THEME["signal_font_size"], color=CHART_THEME["candle_bull"], fontweight="bold",
                 ha="center", va="top",
-                arrowprops=dict(arrowstyle="->", color="#00FF00", lw=1),
+                arrowprops=dict(arrowstyle="->", color=CHART_THEME["candle_bull"], lw=1),
             )
             # Horizontal stop line
-            end = min(sig.bar_index + 5, n - 1)
+            end = min(sig.bar_index + CHART_THEME["signal_extend_bars"], n - 1)
             ax.hlines(sig.actual_price, sig.bar_index, end,
-                      colors="#00FF00", linewidths=1.5, linestyles="solid")
+                      colors=CHART_THEME["candle_bull"], linewidths=CHART_THEME["signal_line_width"], linestyles="solid")
         else:
             ax.annotate(
                 f"▼ REVERSAL\n{sig.price:,.2f}",
                 xy=(sig.bar_index, sig.actual_price),
-                xytext=(sig.bar_index, sig.actual_price * 1.003),
-                fontsize=7, color="#FF0000", fontweight="bold",
+                xytext=(sig.bar_index, sig.actual_price * CHART_THEME["bear_offset_pct"]),
+                fontsize=CHART_THEME["signal_font_size"], color=CHART_THEME["candle_bear"], fontweight="bold",
                 ha="center", va="bottom",
-                arrowprops=dict(arrowstyle="->", color="#FF0000", lw=1),
+                arrowprops=dict(arrowstyle="->", color=CHART_THEME["candle_bear"], lw=1),
             )
-            end = min(sig.bar_index + 5, n - 1)
+            end = min(sig.bar_index + CHART_THEME["signal_extend_bars"], n - 1)
             ax.hlines(sig.actual_price, sig.bar_index, end,
-                      colors="#FF0000", linewidths=1.5, linestyles="solid")
+                      colors=CHART_THEME["candle_bear"], linewidths=CHART_THEME["signal_line_width"], linestyles="solid")
 
     # ── Style ────────────────────────────────────────────────────
-    ax.set_title(title, color="#00FF00", fontsize=14, fontweight="bold")
+    ax.set_title(title, color=CHART_THEME["title_color"], fontsize=CHART_THEME["title_size"], fontweight="bold")
     ax.tick_params(colors="white")
-    ax.spines["bottom"].set_color("#444444")
-    ax.spines["top"].set_color("#444444")
-    ax.spines["left"].set_color("#444444")
-    ax.spines["right"].set_color("#444444")
-    ax.grid(True, color="#333333", linewidth=0.3)
-    ax.legend(loc="upper left", fontsize=8, facecolor="#2A2A2A", edgecolor="#444444",
-              labelcolor="white")
+    ax.spines["bottom"].set_color(CHART_THEME["spine_color"])
+    ax.spines["top"].set_color(CHART_THEME["spine_color"])
+    ax.spines["left"].set_color(CHART_THEME["spine_color"])
+    ax.spines["right"].set_color(CHART_THEME["spine_color"])
+    ax.grid(True, color=CHART_THEME["grid_color"], linewidth=CHART_THEME["grid_width"])
+    ax.legend(loc="upper left", fontsize=CHART_THEME["legend_size"], facecolor=CHART_THEME["legend_bg"],
+              edgecolor=CHART_THEME["legend_edge"], labelcolor="white")
 
     plt.tight_layout()
 

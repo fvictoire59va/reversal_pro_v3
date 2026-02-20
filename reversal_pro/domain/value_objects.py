@@ -83,7 +83,7 @@ class SensitivityConfig:
 @dataclass(frozen=True)
 class OHLCVBar:
     """Single OHLCV price bar."""
-    timestamp: object  # datetime or any timestamp
+    timestamp: object  # datetime, str, or numeric timestamp
     open: float
     high: float
     low: float
@@ -91,9 +91,4 @@ class OHLCVBar:
     volume: float = 0.0
 
 
-@dataclass(frozen=True)
-class PriceLevel:
-    """A price level with bar index."""
-    price: float
-    bar_index: int
-    actual_price: Optional[float] = None  # raw high/low vs smoothed
+

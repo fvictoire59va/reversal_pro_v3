@@ -38,11 +38,6 @@ class ReversalDetector:
         state = SignalState()
         signals: List[ReversalSignal] = []
 
-        # Build a pivot lookup: bar_index -> pivot
-        pivot_at_bar = {}
-        for p in pivots:
-            pivot_at_bar.setdefault(p.bar_index, []).append(p)
-
         # We need to iterate bars in order, processing pivots as they appear
         pivot_iter = iter(sorted(pivots, key=lambda p: p.bar_index))
         next_pivot = next(pivot_iter, None)

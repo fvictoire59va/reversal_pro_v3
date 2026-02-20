@@ -1,0 +1,68 @@
+name: CI — Reversal Detection Pro
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ── Lint ──────────────────────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install ruff
+        run: pip install ruff==0.6.9
+
+      - name: Lint backend
+        run: ruff check backend/
+
+  # ── Unit & Integration Tests ──────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements-dev.txt
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          DATABASE_URL_SYNC: "sqlite:///:memory:"
+          REDIS_URL: "redis://localhost:6379/15"
+          AUTO_REFRESH_ENABLED: "false"
+        run: pytest --cov=app --cov-report=term-missing --cov-fail-under=40
+
+  # ── Docker build smoke-test ───────────────────────────────────────
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -t reversal-backend:test backend/
+
+      - name: Build frontend image
+        run: docker build -t reversal-frontend:test frontend/
+
+      - name: Build db image
+        run: docker build -t reversal-db:test db/

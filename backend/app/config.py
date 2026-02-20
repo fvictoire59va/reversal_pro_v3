@@ -5,9 +5,9 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    # Database
-    database_url: str = "postgresql+asyncpg://reversal:reversal_pro_2025@timescaledb:5432/reversaldb"
-    database_url_sync: str = "postgresql+psycopg2://reversal:reversal_pro_2025@timescaledb:5432/reversaldb"
+    # Database — MUST be set via env/docker-compose (no default password)
+    database_url: str
+    database_url_sync: str
 
     # Redis
     redis_url: str = "redis://redis:6379/0"

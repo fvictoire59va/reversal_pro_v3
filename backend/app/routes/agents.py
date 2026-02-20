@@ -54,10 +54,14 @@ async def get_agents_overview(db: AsyncSession = Depends(get_db)):
     agents = await agent_broker_service.get_all_agents(db)
     open_positions = await agent_broker_service.get_all_open_positions(db)
 
+    # Single aggregate query for all agents (fixes N+1)
+    stats_map = await agent_broker_service.get_all_agent_stats(db)
+    empty_stats = {"open_positions": 0, "total_pnl": 0, "total_unrealized_pnl": 0}
+
     # Build agent responses with stats
     agent_responses = []
     for agent in agents:
-        stats = await agent_broker_service.get_agent_stats(db, agent.id)
+        stats = stats_map.get(agent.id, empty_stats)
         agent_responses.append(_build_agent_response(agent, stats))
 
     # Build position responses with agent names
@@ -305,65 +309,81 @@ async def get_positions_for_chart(
     timeframe: str, 
     db: AsyncSession = Depends(get_db)
 ):
-    """Get all agent positions for a specific symbol/timeframe (for chart display)."""
+    """Get all agent positions for a specific symbol/timeframe (for chart display).
+    
+    Uses a two-query approach instead of correlated subqueries for performance:
+      1. Fetch positions (fast JOIN, no subqueries)
+      2. Batch-fetch relevant logs for matched position IDs
+    """
     from sqlalchemy import text
     
     # Normalize symbol format (BTC-USDT -> BTC/USDT)
     symbol_normalized = symbol.replace("-", "/")
     
-    result = await db.execute(text("""
-        SELECT p.id, p.agent_id, a.name as agent_name, p.side, 
+    # ── Query 1: Positions (no correlated subqueries) ──
+    pos_result = await db.execute(text("""
+        SELECT p.id, p.agent_id, a.name AS agent_name, p.side,
                p.entry_price, p.stop_loss, p.take_profit, p.quantity,
                p.status, p.pnl, p.pnl_percent, p.opened_at, p.closed_at,
                p.exit_price,
-               -- Close reason from logs
-               (SELECT l.details->>'reason'
-                FROM agent_logs l
-                WHERE l.agent_id = p.agent_id
-                  AND l.action IN ('POSITION_CLOSED', 'POSITION_STOPPED')
-                  AND (l.details->>'position_id')::int = p.id
-                ORDER BY l.created_at DESC LIMIT 1
-               ) as close_reason,
-               -- Open details from logs (JSON)
-               (SELECT l.details
-                FROM agent_logs l
-                WHERE l.agent_id = p.agent_id
-                  AND l.action = 'POSITION_OPENED'
-                  AND (l.details->>'position_id')::int = p.id
-                ORDER BY l.created_at DESC LIMIT 1
-               ) as open_details,
                p.original_stop_loss, p.tp2, p.original_quantity,
                p.partial_closed, p.partial_pnl,
-               a.mode as agent_mode,
-               -- Partial TP timestamp from logs
-               (SELECT l.created_at
-                FROM agent_logs l
-                WHERE l.agent_id = p.agent_id
-                  AND l.action = 'PARTIAL_TP_CLOSED'
-                  AND (l.details->>'position_id')::int = p.id
-                ORDER BY l.created_at DESC LIMIT 1
-               ) as partial_tp_at,
-               -- Breakeven timestamp from logs
-               (SELECT l.created_at
-                FROM agent_logs l
-                WHERE l.agent_id = p.agent_id
-                  AND l.action = 'BREAKEVEN_ACTIVATED'
-                  AND (l.details->>'position_id')::int = p.id
-                ORDER BY l.created_at DESC LIMIT 1
-               ) as breakeven_at
+               a.mode AS agent_mode
         FROM agent_positions p
         JOIN agents a ON p.agent_id = a.id
-        WHERE p.symbol = :symbol 
+        WHERE p.symbol = :symbol
           AND a.timeframe = :timeframe
         ORDER BY p.opened_at DESC
         LIMIT 50
     """), {"symbol": symbol_normalized, "timeframe": timeframe})
     
+    rows = pos_result.fetchall()
+    if not rows:
+        return {"positions": []}
+
+    # Collect position IDs and agent IDs for batch log lookup
+    pos_ids = [r[0] for r in rows]
+    agent_ids = list({r[1] for r in rows})
+
+    # ── Query 2: Batch-fetch all relevant logs for these positions ──
+    log_result = await db.execute(text("""
+        SELECT l.agent_id, l.action,
+               (l.details->>'position_id')::int AS position_id,
+               l.details, l.created_at
+        FROM agent_logs l
+        WHERE l.agent_id = ANY(:agent_ids)
+          AND l.action IN ('POSITION_OPENED', 'POSITION_CLOSED', 'POSITION_STOPPED',
+                           'PARTIAL_TP_CLOSED', 'BREAKEVEN_ACTIVATED')
+          AND (l.details->>'position_id')::int = ANY(:pos_ids)
+        ORDER BY l.created_at DESC
+    """), {"agent_ids": agent_ids, "pos_ids": pos_ids})
+
+    # Index logs by (position_id, action) — keep only the most recent per combo
+    log_map: dict[tuple[int, str], dict] = {}
+    for lr in log_result.fetchall():
+        pid = lr[2]
+        action = lr[1]
+        key = (pid, action)
+        if key not in log_map:
+            log_map[key] = {"details": lr[3] or {}, "created_at": lr[4]}
+
+    # ── Build response ──
     positions = []
-    for row in result.fetchall():
-        open_details = row[15] or {}  # index 15 = open_details JSONB subquery
+    for row in rows:
+        pid = row[0]
+        agent_mode = row[19]
+
+        close_log = log_map.get((pid, "POSITION_CLOSED")) or log_map.get((pid, "POSITION_STOPPED"))
+        close_reason = close_log["details"].get("reason") if close_log else None
+
+        open_log = log_map.get((pid, "POSITION_OPENED"))
+        open_details = open_log["details"] if open_log else {}
+
+        partial_log = log_map.get((pid, "PARTIAL_TP_CLOSED"))
+        breakeven_log = log_map.get((pid, "BREAKEVEN_ACTIVATED"))
+
         positions.append({
-            "id": row[0],
+            "id": pid,
             "agent_id": row[1],
             "agent_name": row[2],
             "side": row[3],
@@ -377,7 +397,7 @@ async def get_positions_for_chart(
             "opened_at": row[11].isoformat() if row[11] else None,
             "closed_at": row[12].isoformat() if row[12] else None,
             "exit_price": row[13],
-            "close_reason": row[14],
+            "close_reason": close_reason,
             "open_details": {
                 "stop_loss": open_details.get("stop_loss"),
                 "take_profit_1": open_details.get("take_profit_1"),
@@ -387,16 +407,16 @@ async def get_positions_for_chart(
                 "rr_ratio_tp1": open_details.get("rr_ratio_tp1"),
                 "rr_ratio_tp2": open_details.get("rr_ratio_tp2"),
                 "zone_tp_used": open_details.get("zone_tp_used"),
-                "mode": open_details.get("mode") or row[21],
+                "mode": open_details.get("mode") or agent_mode,
                 "is_paper": open_details.get("is_paper"),
             } if open_details else {},
-            "original_stop_loss": row[16],
-            "tp2": row[17],
-            "original_quantity": row[18],
-            "partial_closed": row[19],
-            "partial_pnl": row[20],
-            "partial_tp_at": row[22].isoformat() if row[22] else None,
-            "breakeven_at": row[23].isoformat() if row[23] else None,
+            "original_stop_loss": row[14],
+            "tp2": row[15],
+            "original_quantity": row[16],
+            "partial_closed": row[17],
+            "partial_pnl": row[18],
+            "partial_tp_at": partial_log["created_at"].isoformat() if partial_log else None,
+            "breakeven_at": breakeven_log["created_at"].isoformat() if breakeven_log else None,
         })
     
     return {"positions": positions}

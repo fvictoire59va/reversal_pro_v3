@@ -1772,6 +1772,28 @@ class AgentBrokerService:
         """))
         return round(float(result.scalar()), 4)
 
+    async def get_all_agent_stats(self, db: AsyncSession) -> dict[int, dict]:
+        """Get stats for ALL agents in a single query (avoids N+1).
+
+        Returns ``{agent_id: {"open_positions": int, "total_pnl": float, "total_unrealized_pnl": float}}``.
+        """
+        result = await db.execute(text("""
+            SELECT agent_id,
+                   COUNT(*)    FILTER (WHERE status = 'OPEN')                         AS open_positions,
+                   COALESCE(SUM(pnl), 0) FILTER (WHERE status IN ('CLOSED','STOPPED')) AS total_pnl,
+                   COALESCE(SUM(unrealized_pnl), 0) FILTER (WHERE status = 'OPEN')     AS total_unrealized_pnl
+            FROM agent_positions
+            GROUP BY agent_id
+        """))
+        stats_map: dict[int, dict] = {}
+        for row in result.fetchall():
+            stats_map[row[0]] = {
+                "open_positions": row[1],
+                "total_pnl": round(float(row[2]), 4),
+                "total_unrealized_pnl": round(float(row[3]), 4),
+            }
+        return stats_map
+
 
 # Backward-compatible singleton — delegates to centralized dependencies
 def __getattr__(name):

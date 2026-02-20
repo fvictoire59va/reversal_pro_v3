@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS signals (
     is_bullish      BOOLEAN     NOT NULL,
     is_preview      BOOLEAN     NOT NULL DEFAULT FALSE,
     signal_label    TEXT        NOT NULL DEFAULT 'REVERSAL',
+    detected_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -154,21 +155,33 @@ CREATE TABLE IF NOT EXISTS agent_positions (
     entry_price     DOUBLE PRECISION NOT NULL,
     exit_price      DOUBLE PRECISION,
     stop_loss       DOUBLE PRECISION NOT NULL,
+    original_stop_loss DOUBLE PRECISION,           -- Initial SL before breakeven/trailing
     take_profit     DOUBLE PRECISION,
+    tp2             DOUBLE PRECISION,              -- Second TP target for partial close
     quantity        DOUBLE PRECISION NOT NULL,
+    original_quantity DOUBLE PRECISION,            -- Quantity at open before partial close
+    invested_eur    DOUBLE PRECISION,              -- EUR amount invested at open
     status          VARCHAR(10) NOT NULL DEFAULT 'OPEN',  -- OPEN, CLOSED, STOPPED
+    partial_closed  BOOLEAN DEFAULT FALSE,         -- True after first partial TP taken
+    partial_pnl     DOUBLE PRECISION,              -- PnL from partial close (EUR)
+    best_price      DOUBLE PRECISION,              -- Best price reached (for trailing stop)
     entry_signal_id INTEGER,
     exit_signal_id  INTEGER,
     entry_signal_time TIMESTAMPTZ,
     entry_signal_is_bullish BOOLEAN,
     pnl             DOUBLE PRECISION,
     pnl_percent     DOUBLE PRECISION,
+    unrealized_pnl  DOUBLE PRECISION,
+    unrealized_pnl_percent DOUBLE PRECISION,
+    current_price   DOUBLE PRECISION,
+    pnl_updated_at  TIMESTAMPTZ,
     opened_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     closed_at       TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_positions_agent ON agent_positions (agent_id, status);
 CREATE INDEX IF NOT EXISTS idx_positions_status ON agent_positions (status);
+CREATE INDEX IF NOT EXISTS idx_positions_symbol ON agent_positions (symbol);
 
 -- ============================================================================
 -- Agent Activity Logs
@@ -182,6 +195,7 @@ CREATE TABLE IF NOT EXISTS agent_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_agent ON agent_logs (agent_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_logs_position ON agent_logs ((details->>'position_id')) WHERE details->>'position_id' IS NOT NULL;
 
 -- ============================================================================
 -- Retention Policies (auto-drop old data)

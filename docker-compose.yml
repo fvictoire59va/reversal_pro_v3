@@ -29,16 +29,16 @@ services:
     container_name: reversal_timescaledb
     restart: unless-stopped
     environment:
-      POSTGRES_USER: reversal
-      POSTGRES_PASSWORD: reversal_pro_2025
-      POSTGRES_DB: reversaldb
+      POSTGRES_USER: ${POSTGRES_USER:-reversal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-reversaldb}
     ports:
       - "5432:5432"
     volumes:
       - timescale_data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U reversal -d reversaldb"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-reversal} -d $${POSTGRES_DB:-reversaldb}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -73,8 +73,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: "postgresql+asyncpg://reversal:reversal_pro_2025@timescaledb:5432/reversaldb"
-      DATABASE_URL_SYNC: "postgresql+psycopg2://reversal:reversal_pro_2025@timescaledb:5432/reversaldb"
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-reversal}:${POSTGRES_PASSWORD:?err}@timescaledb:5432/${POSTGRES_DB:-reversaldb}"
+      DATABASE_URL_SYNC: "postgresql+psycopg2://${POSTGRES_USER:-reversal}:${POSTGRES_PASSWORD:?err}@timescaledb:5432/${POSTGRES_DB:-reversaldb}"
       REDIS_URL: "redis://redis:6379/0"
       CORS_ORIGINS: '["http://localhost:8080","http://localhost:3000","http://frontend:3000"]'
       DEFAULT_EXCHANGE: "binance"

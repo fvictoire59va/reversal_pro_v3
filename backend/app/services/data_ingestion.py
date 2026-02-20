@@ -23,17 +23,26 @@ class DataIngestionService:
         self._exchanges = {}
 
     def _get_exchange(self, exchange_id: str):
-        """Lazy-load ccxt exchange instance."""
+        """Lazy-load async ccxt exchange instance."""
         if exchange_id not in self._exchanges:
             try:
-                import ccxt
-                exchange_class = getattr(ccxt, exchange_id, None)
+                import ccxt.async_support as ccxt_async
+                exchange_class = getattr(ccxt_async, exchange_id, None)
                 if exchange_class is None:
                     raise ValueError(f"Exchange '{exchange_id}' not found")
                 self._exchanges[exchange_id] = exchange_class({"enableRateLimit": True})
             except ImportError:
                 raise ImportError("ccxt is required: pip install ccxt")
         return self._exchanges[exchange_id]
+
+    async def close_exchanges(self):
+        """Close all async exchange sessions."""
+        for exchange in self._exchanges.values():
+            try:
+                await exchange.close()
+            except Exception:
+                pass
+        self._exchanges.clear()
 
     async def fetch_and_store(
         self,
@@ -54,7 +63,7 @@ class DataIngestionService:
         logger.info(f"Fetching {limit} bars for {symbol} {timeframe} from {exchange_id}")
 
         try:
-            raw = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since_ms, limit=limit)
+            raw = await exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since_ms, limit=limit)
         except Exception as e:
             logger.error(f"Error fetching from {exchange_id}: {e}")
             raise

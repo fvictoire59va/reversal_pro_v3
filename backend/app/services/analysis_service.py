@@ -33,6 +33,14 @@ from ..services.telegram_service import telegram_service
 logger = logging.getLogger(__name__)
 
 
+# Cache TTL in seconds, adapted to candle timeframe
+_CACHE_TTL = {"1m": 15, "5m": 45, "15m": 90, "30m": 120, "1h": 180, "4h": 300, "1d": 600}
+
+
+def _ttl_for(timeframe: str) -> int:
+    return _CACHE_TTL.get(timeframe, 120)
+
+
 class AnalysisService:
     """Run the reversal detection engine and persist/format results."""
 
@@ -44,11 +52,10 @@ class AnalysisService:
         limit: int = 500,
     ) -> List[dict]:
         """Load OHLCV bars from TimescaleDB."""
-        # Cache disabled for real-time updates
-        # cache_key = f"ohlcv:{symbol}:{timeframe}:{limit}"
-        # cached = await cache_get(cache_key)
-        # if cached:
-        #     return cached
+        cache_key = f"ohlcv:{symbol}:{timeframe}:{limit}"
+        cached = await cache_get(cache_key)
+        if cached:
+            return cached
 
         query = text("""
             SELECT time, open, high, low, close, volume
@@ -82,9 +89,7 @@ class AnalysisService:
         ]
 
         if bars:
-            # Cache disabled for real-time updates
-            # await cache_set(cache_key, bars, ttl=60)
-            pass
+            await cache_set(cache_key, bars, ttl=_ttl_for(timeframe))
 
         return bars
 
@@ -195,8 +200,9 @@ class AnalysisService:
             for z in result.zones
         ]
 
-        # Invalidate chart cache
+        # Invalidate chart and ohlcv caches so get_chart_data re-builds
         await cache_delete(f"chart:{request.symbol}:{request.timeframe}*")
+        await cache_delete(f"ohlcv:{request.symbol}:{request.timeframe}*")
 
         return AnalysisResponse(
             symbol=request.symbol,
@@ -228,11 +234,10 @@ class AnalysisService:
     ) -> ChartDataResponse:
         """Get data formatted for TradingView lightweight-charts."""
 
-        # Cache disabled for real-time updates
-        # cache_key = f"chart:{symbol}:{timeframe}:{limit}:{sensitivity}"
-        # cached = await cache_get(cache_key)
-        # if cached:
-        #     return ChartDataResponse(**cached)
+        cache_key = f"chart:{symbol}:{timeframe}:{limit}:{sensitivity}:{signal_mode}"
+        cached = await cache_get(cache_key)
+        if cached:
+            return ChartDataResponse(**cached)
 
         # Run full analysis
         request = AnalysisRequest(
@@ -329,8 +334,7 @@ class AnalysisService:
             atr_multiplier=analysis.atr_multiplier,
         )
 
-        # Cache disabled for real-time updates
-        # await cache_set(cache_key, chart_data.model_dump(), ttl=120)
+        await cache_set(cache_key, chart_data.model_dump(), ttl=_ttl_for(timeframe))
 
         return chart_data
 

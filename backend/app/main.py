@@ -109,7 +109,13 @@ async def lifespan(app: FastAPI):
 
     yield  # App is running
 
+    # Cleanup: close async exchange sessions
     logger.info("Shutting down...")
+    try:
+        from .services.data_ingestion import ingestion_service
+        await ingestion_service.close_exchanges()
+    except Exception:
+        pass
 
 
 # Create app

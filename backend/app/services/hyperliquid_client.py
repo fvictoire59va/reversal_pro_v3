@@ -82,6 +82,9 @@ class HyperliquidClient:
         # Paper trading state
         self._paper_positions: Dict[str, Dict] = {}
         self._paper_order_counter = 0
+        # Dynamic asset mapping cache (populated from /info meta endpoint)
+        self._asset_map_cache: Dict[str, int] = {}
+        self._size_decimals_cache: Dict[str, int] = {}
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -212,7 +215,7 @@ class HyperliquidClient:
 
                 # Round quantity to appropriate precision
                 # Hyperliquid has specific size decimals per asset
-                sz_decimals = self._get_size_decimals(coin)
+                sz_decimals = await self._get_size_decimals(coin)
                 quantity = round(quantity, sz_decimals)
 
                 is_buy = (side == "LONG")
@@ -233,7 +236,7 @@ class HyperliquidClient:
                 order_payload = {
                     "type": "order",
                     "orders": [{
-                        "a": self._coin_to_asset_id(coin),
+                        "a": await self._coin_to_asset_id(coin),
                         "b": is_buy,
                         "p": str(current_price),
                         "s": str(quantity),
@@ -297,7 +300,7 @@ class HyperliquidClient:
                 order_payload = {
                     "type": "order",
                     "orders": [{
-                        "a": self._coin_to_asset_id(coin),
+                        "a": await self._coin_to_asset_id(coin),
                         "b": is_buy,
                         "p": str(current_price),
                         "s": str(quantity),
@@ -364,27 +367,60 @@ class HyperliquidClient:
             )
 
     # ── Helpers ──────────────────────────────────────────────
-    @staticmethod
-    def _get_size_decimals(coin: str) -> int:
-        """Size decimal precision per asset on Hyperliquid."""
-        decimals_map = {
-            "BTC": 5, "ETH": 4, "SOL": 2, "BNB": 3,
-            "DOGE": 0, "XRP": 1, "ADA": 0, "AVAX": 2,
-            "LINK": 2, "DOT": 1, "MATIC": 0, "UNI": 2,
-        }
-        return decimals_map.get(coin, 3)
+    async def _fetch_asset_map(self) -> Dict[str, int]:
+        """Fetch coin→asset_id mapping dynamically from Hyperliquid meta endpoint."""
+        if self._asset_map_cache:
+            return self._asset_map_cache
+        try:
+            client = await self._get_client()
+            resp = await client.post(
+                HYPERLIQUID_INFO_URL,
+                json={"type": "meta"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            universe = data.get("universe", [])
+            self._asset_map_cache = {
+                asset["name"]: idx for idx, asset in enumerate(universe)
+            }
+            # Also build size decimals from szDecimals
+            self._size_decimals_cache = {
+                asset["name"]: asset.get("szDecimals", 3) for asset in universe
+            }
+            logger.info(f"Fetched Hyperliquid meta: {len(universe)} assets")
+            return self._asset_map_cache
+        except Exception as e:
+            logger.warning(f"Failed to fetch Hyperliquid meta: {e}, using fallback")
+            return _FALLBACK_ASSET_MAP
 
-    @staticmethod
-    def _coin_to_asset_id(coin: str) -> int:
-        """Map coin name to Hyperliquid asset index."""
-        # This mapping should be fetched dynamically from Hyperliquid meta endpoint
-        asset_map = {
-            "BTC": 0, "ETH": 1, "SOL": 4, "BNB": 11,
-            "DOGE": 5, "XRP": 8, "ADA": 9, "AVAX": 6,
-            "LINK": 7, "DOT": 10, "MATIC": 3, "UNI": 12,
-        }
-        return asset_map.get(coin, 0)
+    async def _coin_to_asset_id(self, coin: str) -> int:
+        """Map coin name to Hyperliquid asset index (dynamic with fallback)."""
+        asset_map = await self._fetch_asset_map()
+        if coin not in asset_map:
+            raise ValueError(
+                f"Unknown coin '{coin}' — not found in Hyperliquid universe. "
+                f"Known coins: {', '.join(sorted(asset_map.keys())[:20])}..."
+            )
+        return asset_map[coin]
 
+    async def _get_size_decimals(self, coin: str) -> int:
+        """Size decimal precision per asset on Hyperliquid (dynamic with fallback)."""
+        if not self._size_decimals_cache:
+            await self._fetch_asset_map()
+        return self._size_decimals_cache.get(coin, _FALLBACK_SIZE_DECIMALS.get(coin, 3))
+
+
+# Fallback maps used when the meta endpoint is unavailable
+_FALLBACK_ASSET_MAP = {
+    "BTC": 0, "ETH": 1, "SOL": 4, "BNB": 11,
+    "DOGE": 5, "XRP": 8, "ADA": 9, "AVAX": 6,
+    "LINK": 7, "DOT": 10, "MATIC": 3, "UNI": 12,
+}
+_FALLBACK_SIZE_DECIMALS = {
+    "BTC": 5, "ETH": 4, "SOL": 2, "BNB": 3,
+    "DOGE": 0, "XRP": 1, "ADA": 0, "AVAX": 2,
+    "LINK": 2, "DOT": 1, "MATIC": 0, "UNI": 2,
+}
 
 # Singleton
 hyperliquid_client = HyperliquidClient()

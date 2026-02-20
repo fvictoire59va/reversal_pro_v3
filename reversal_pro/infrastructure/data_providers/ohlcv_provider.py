@@ -4,7 +4,7 @@ OHLCV data provider — abstraction + CSV / ccxt implementations.
 
 import csv
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -147,7 +147,7 @@ class CCXTProvider(OHLCVProvider):
         bars: List[OHLCVBar] = []
         for candle in raw:
             bars.append(OHLCVBar(
-                timestamp=datetime.fromtimestamp(candle[0] / 1000),
+                timestamp=datetime.fromtimestamp(candle[0] / 1000, tz=timezone.utc),
                 open=float(candle[1]),
                 high=float(candle[2]),
                 low=float(candle[3]),

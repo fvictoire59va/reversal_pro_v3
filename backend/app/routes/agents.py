@@ -24,6 +24,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
 
+def _build_agent_response(agent, stats: dict) -> AgentResponse:
+    """Build a consistent AgentResponse from an Agent ORM object and stats dict."""
+    return AgentResponse(
+        id=agent.id,
+        name=agent.name,
+        symbol=agent.symbol,
+        timeframe=agent.timeframe,
+        trade_amount=agent.trade_amount,
+        balance=agent.balance,
+        is_active=agent.is_active,
+        mode=agent.mode,
+        sensitivity=agent.sensitivity,
+        signal_mode=agent.signal_mode,
+        analysis_limit=agent.analysis_limit,
+        created_at=agent.created_at,
+        updated_at=agent.updated_at,
+        open_positions=stats["open_positions"],
+        total_pnl=stats["total_pnl"],
+        total_unrealized_pnl=stats["total_unrealized_pnl"],
+    )
+
+
 # ── Agents CRUD ──────────────────────────────────────────────
 
 @router.get("/", response_model=AgentsOverview)
@@ -36,24 +58,7 @@ async def get_agents_overview(db: AsyncSession = Depends(get_db)):
     agent_responses = []
     for agent in agents:
         stats = await agent_broker_service.get_agent_stats(db, agent.id)
-        agent_responses.append(AgentResponse(
-            id=agent.id,
-            name=agent.name,
-            symbol=agent.symbol,
-            timeframe=agent.timeframe,
-            trade_amount=agent.trade_amount,
-            balance=agent.balance,
-            is_active=agent.is_active,
-            mode=agent.mode,
-            sensitivity=agent.sensitivity,
-            signal_mode=agent.signal_mode,
-            analysis_limit=agent.analysis_limit,
-            created_at=agent.created_at,
-            updated_at=agent.updated_at,
-            open_positions=stats["open_positions"],
-            total_pnl=stats["total_pnl"],
-            total_unrealized_pnl=stats["total_unrealized_pnl"],
-        ))
+        agent_responses.append(_build_agent_response(agent, stats))
 
     # Build position responses with agent names
     agent_name_map = {a.id: a.name for a in agents}
@@ -108,24 +113,7 @@ async def create_agent(req: AgentCreate, db: AsyncSession = Depends(get_db)):
             req.sensitivity, req.signal_mode, req.analysis_limit,
         )
         stats = await agent_broker_service.get_agent_stats(db, agent.id)
-        return AgentResponse(
-            id=agent.id,
-            name=agent.name,
-            symbol=agent.symbol,
-            timeframe=agent.timeframe,
-            trade_amount=agent.trade_amount,
-            balance=agent.balance,
-            is_active=agent.is_active,
-            mode=agent.mode,
-            sensitivity=agent.sensitivity,
-            signal_mode=agent.signal_mode,
-            analysis_limit=agent.analysis_limit,
-            created_at=agent.created_at,
-            updated_at=agent.updated_at,
-            open_positions=stats["open_positions"],
-            total_pnl=stats["total_pnl"],
-            total_unrealized_pnl=stats["total_unrealized_pnl"],
-        )
+        return _build_agent_response(agent, stats)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -147,26 +135,12 @@ async def toggle_agent(agent_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Agent not found")
 
     stats = await agent_broker_service.get_agent_stats(db, agent.id)
-    return AgentResponse(
-        id=agent.id,
-        name=agent.name,
-        symbol=agent.symbol,
-        timeframe=agent.timeframe,
-        trade_amount=agent.trade_amount,
-        balance=agent.balance,
-        is_active=agent.is_active,
-        mode=agent.mode,
-        created_at=agent.created_at,
-        updated_at=agent.updated_at,
-        open_positions=stats["open_positions"],
-        total_pnl=stats["total_pnl"],
-        total_unrealized_pnl=stats["total_unrealized_pnl"],
-    )
+    return _build_agent_response(agent, stats)
 
 
 @router.patch("/{agent_id}", response_model=AgentResponse)
 async def update_agent(agent_id: int, req: AgentUpdate, db: AsyncSession = Depends(get_db)):
-    """Update agent settings (trade_amount, mode)."""
+    """Update agent settings (trade_amount, mode, sensitivity, signal_mode, analysis_limit)."""
     agent = await agent_broker_service.get_agent(db, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -175,26 +149,18 @@ async def update_agent(agent_id: int, req: AgentUpdate, db: AsyncSession = Depen
         agent.trade_amount = req.trade_amount
     if req.mode is not None:
         agent.mode = req.mode
+    if req.sensitivity is not None:
+        agent.sensitivity = req.sensitivity
+    if req.signal_mode is not None:
+        agent.signal_mode = req.signal_mode
+    if req.analysis_limit is not None:
+        agent.analysis_limit = req.analysis_limit
 
     await db.commit()
     await db.refresh(agent)
 
     stats = await agent_broker_service.get_agent_stats(db, agent.id)
-    return AgentResponse(
-        id=agent.id,
-        name=agent.name,
-        symbol=agent.symbol,
-        timeframe=agent.timeframe,
-        trade_amount=agent.trade_amount,
-        balance=agent.balance,
-        is_active=agent.is_active,
-        mode=agent.mode,
-        created_at=agent.created_at,
-        updated_at=agent.updated_at,
-        open_positions=stats["open_positions"],
-        total_pnl=stats["total_pnl"],
-        total_unrealized_pnl=stats["total_unrealized_pnl"],
-    )
+    return _build_agent_response(agent, stats)
 
 
 # ── Positions ────────────────────────────────────────────────

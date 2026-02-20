@@ -1,12 +1,17 @@
 """SQLAlchemy ORM models matching TimescaleDB schema."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import (
     Column, String, Float, Boolean, Integer, DateTime, Text,
     PrimaryKeyConstraint, Index, ForeignKey, JSON,
 )
 from sqlalchemy.orm import relationship
 from .database import Base
+
+
+def _utcnow():
+    """Return a timezone-aware UTC datetime (replacement for datetime.utcnow)."""
+    return datetime.now(timezone.utc)
 
 
 class OHLCV(Base):
@@ -56,8 +61,8 @@ class Signal(Base):
     is_bullish = Column(Boolean, nullable=False)
     is_preview = Column(Boolean, nullable=False, default=False)
     signal_label = Column(String, nullable=False, default="REVERSAL")
-    detected_at = Column(DateTime(timezone=True), default=datetime.utcnow)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    detected_at = Column(DateTime(timezone=True), default=_utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
 
 
 class Zone(Base):
@@ -73,7 +78,7 @@ class Zone(Base):
     bottom_price = Column(Float, nullable=False)
     start_bar = Column(Integer, nullable=False)
     end_bar = Column(Integer, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
 
 
 class AnalysisRun(Base):
@@ -91,7 +96,7 @@ class AnalysisRun(Base):
     total_signals = Column(Integer, default=0)
     total_zones = Column(Integer, default=0)
     bars_analyzed = Column(Integer, default=0)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
 
 
 class Watchlist(Base):
@@ -101,7 +106,7 @@ class Watchlist(Base):
     timeframe = Column(String, nullable=False, default="1h")
     exchange = Column(String, nullable=False, default="binance")
     is_active = Column(Boolean, nullable=False, default=True)
-    added_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    added_at = Column(DateTime(timezone=True), default=_utcnow)
 
     __table_args__ = (
         PrimaryKeyConstraint("symbol", "timeframe"),
@@ -123,8 +128,8 @@ class Agent(Base):
     sensitivity = Column(String(20), nullable=False, default="Medium")
     signal_mode = Column(String(30), nullable=False, default="Confirmed Only")
     analysis_limit = Column(Integer, nullable=False, default=500)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     positions = relationship("AgentPosition", back_populates="agent", cascade="all, delete-orphan")
     logs = relationship("AgentLog", back_populates="agent", cascade="all, delete-orphan")
@@ -160,7 +165,7 @@ class AgentPosition(Base):
     unrealized_pnl_percent = Column(Float)
     current_price = Column(Float)
     pnl_updated_at = Column(DateTime(timezone=True))
-    opened_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    opened_at = Column(DateTime(timezone=True), default=_utcnow)
     closed_at = Column(DateTime(timezone=True))
 
     agent = relationship("Agent", back_populates="positions")
@@ -173,6 +178,6 @@ class AgentLog(Base):
     agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
     action = Column(String(50), nullable=False)
     details = Column(JSON)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     agent = relationship("Agent", back_populates="logs")

@@ -47,6 +47,8 @@ export class ChartManager {
             sl: null,
             lines: [],
         };
+        // Bound reference for proper subscribe/unsubscribe
+        this._boundPositionClick = this._handlePositionClick.bind(this);
         
         this._init();
     }
@@ -587,6 +589,23 @@ export class ChartManager {
      * Scroll to a specific timestamp.
      */
     scrollToTime(timestamp) {
+        if (timestamp) {
+            this.chart.timeScale().scrollToRealTime();
+            // Find the bar index closest to the target timestamp
+            const visibleRange = this.chart.timeScale().getVisibleLogicalRange();
+            if (visibleRange) {
+                const timeScale = this.chart.timeScale();
+                const coord = timeScale.timeToCoordinate(timestamp);
+                if (coord !== null) {
+                    timeScale.scrollToPosition(
+                        timeScale.logicalToCoordinate(visibleRange.from) - coord,
+                        false
+                    );
+                    return;
+                }
+            }
+        }
+        // Fallback: scroll near the end
         this.chart.timeScale().scrollToPosition(-5, false);
     }
 
@@ -600,14 +619,16 @@ export class ChartManager {
         this.positionTool.step = 0;
         this.clearPosition();
         
-        // Subscribe to chart clicks
-        this.chart.subscribeClick(this._handlePositionClick.bind(this));
+        // Unsubscribe first to prevent stacking, then subscribe
+        this.chart.unsubscribeClick(this._boundPositionClick);
+        this.chart.subscribeClick(this._boundPositionClick);
         this.container.style.cursor = 'crosshair';
     }
 
     deactivatePositionTool() {
         this.positionTool.active = false;
         this.positionTool.mode = null;
+        this.chart.unsubscribeClick(this._boundPositionClick);
         this.container.style.cursor = 'default';
     }
 

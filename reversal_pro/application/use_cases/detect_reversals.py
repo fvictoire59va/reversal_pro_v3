@@ -57,8 +57,14 @@ class DetectReversalsUseCase:
         timeframe: str = "1h",
     ):
         # Resolve sensitivity config (with timeframe-adaptive ATR scaling)
-        if sensitivity == SensitivityPreset.CUSTOM and custom_config:
-            self.sensitivity_config = custom_config
+        if sensitivity == SensitivityPreset.CUSTOM:
+            if custom_config:
+                self.sensitivity_config = custom_config
+            else:
+                # Fallback to Medium when CUSTOM is requested without a config
+                self.sensitivity_config = SensitivityConfig.from_preset(
+                    SensitivityPreset.MEDIUM, timeframe=timeframe
+                )
         else:
             self.sensitivity_config = SensitivityConfig.from_preset(sensitivity, timeframe=timeframe)
 

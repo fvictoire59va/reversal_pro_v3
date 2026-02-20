@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ── OHLCV ───────────────────────────────────────────────────────
@@ -179,8 +179,7 @@ class AgentResponse(BaseModel):
     total_pnl: float = 0.0
     total_unrealized_pnl: float = 0.0
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PositionResponse(BaseModel):
@@ -209,8 +208,7 @@ class PositionResponse(BaseModel):
     opened_at: datetime
     closed_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AgentLogResponse(BaseModel):
@@ -220,8 +218,7 @@ class AgentLogResponse(BaseModel):
     details: Optional[dict] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AgentsOverview(BaseModel):

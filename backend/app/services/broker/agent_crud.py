@@ -7,12 +7,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, List
 
-import redis.asyncio as aioredis
 from sqlalchemy import text, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...models import Agent, AgentPosition, AgentLog
-from ...config import get_settings
+from ...cache import get_redis_client
 from ..telegram_service import telegram_service
 
 logger = logging.getLogger(__name__)
@@ -23,8 +22,7 @@ class AgentCrudMixin:
 
     def __init__(self):
         self._running_agents: dict[int, bool] = {}
-        settings = get_settings()
-        self._redis = aioredis.from_url(settings.redis_url)
+        self._redis = get_redis_client()
 
     # ── Agent CRUD ───────────────────────────────────────────
 

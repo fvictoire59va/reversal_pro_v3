@@ -46,6 +46,36 @@ def _build_agent_response(agent, stats: dict) -> AgentResponse:
     )
 
 
+def _build_position_response(p, agent_name: str = "unknown") -> PositionResponse:
+    """Build a complete PositionResponse from an AgentPosition ORM object."""
+    return PositionResponse(
+        id=p.id,
+        agent_id=p.agent_id,
+        agent_name=agent_name,
+        symbol=p.symbol,
+        side=p.side,
+        entry_price=p.entry_price,
+        exit_price=p.exit_price,
+        stop_loss=p.stop_loss,
+        original_stop_loss=p.original_stop_loss,
+        take_profit=p.take_profit,
+        tp2=p.tp2,
+        quantity=p.quantity,
+        original_quantity=p.original_quantity,
+        status=p.status,
+        partial_closed=p.partial_closed or False,
+        partial_pnl=p.partial_pnl,
+        pnl=p.pnl,
+        pnl_percent=p.pnl_percent,
+        unrealized_pnl=p.unrealized_pnl,
+        unrealized_pnl_percent=p.unrealized_pnl_percent,
+        current_price=p.current_price,
+        pnl_updated_at=p.pnl_updated_at,
+        opened_at=p.opened_at,
+        closed_at=p.closed_at,
+    )
+
+
 # ── Agents CRUD ──────────────────────────────────────────────
 
 @router.get("/", response_model=AgentsOverview)
@@ -67,32 +97,7 @@ async def get_agents_overview(db: AsyncSession = Depends(get_db)):
     # Build position responses with agent names
     agent_name_map = {a.id: a.name for a in agents}
     position_responses = [
-        PositionResponse(
-            id=p.id,
-            agent_id=p.agent_id,
-            agent_name=agent_name_map.get(p.agent_id, "unknown"),
-            symbol=p.symbol,
-            side=p.side,
-            entry_price=p.entry_price,
-            exit_price=p.exit_price,
-            stop_loss=p.stop_loss,
-            original_stop_loss=p.original_stop_loss,
-            take_profit=p.take_profit,
-            tp2=p.tp2,
-            quantity=p.quantity,
-            original_quantity=p.original_quantity,
-            status=p.status,
-            partial_closed=p.partial_closed or False,
-            partial_pnl=p.partial_pnl,
-            pnl=p.pnl,
-            pnl_percent=p.pnl_percent,
-            unrealized_pnl=p.unrealized_pnl,
-            unrealized_pnl_percent=p.unrealized_pnl_percent,
-            current_price=p.current_price,
-            pnl_updated_at=p.pnl_updated_at,
-            opened_at=p.opened_at,
-            closed_at=p.closed_at,
-        )
+        _build_position_response(p, agent_name_map.get(p.agent_id, "unknown"))
         for p in open_positions
     ]
 
@@ -193,23 +198,7 @@ async def get_all_positions(
     name_map = {a.id: a.name for a in agents}
 
     return [
-        PositionResponse(
-            id=p.id,
-            agent_id=p.agent_id,
-            agent_name=name_map.get(p.agent_id, "unknown"),
-            symbol=p.symbol,
-            side=p.side,
-            entry_price=p.entry_price,
-            exit_price=p.exit_price,
-            stop_loss=p.stop_loss,
-            take_profit=p.take_profit,
-            quantity=p.quantity,
-            status=p.status,
-            pnl=p.pnl,
-            pnl_percent=p.pnl_percent,
-            opened_at=p.opened_at,
-            closed_at=p.closed_at,
-        )
+        _build_position_response(p, name_map.get(p.agent_id, "unknown"))
         for p in positions
     ]
 
@@ -222,23 +211,7 @@ async def get_agent_positions(agent_id: int, db: AsyncSession = Depends(get_db))
     agent_name = agent.name if agent else "unknown"
 
     return [
-        PositionResponse(
-            id=p.id,
-            agent_id=p.agent_id,
-            agent_name=agent_name,
-            symbol=p.symbol,
-            side=p.side,
-            entry_price=p.entry_price,
-            exit_price=p.exit_price,
-            stop_loss=p.stop_loss,
-            take_profit=p.take_profit,
-            quantity=p.quantity,
-            status=p.status,
-            pnl=p.pnl,
-            pnl_percent=p.pnl_percent,
-            opened_at=p.opened_at,
-            closed_at=p.closed_at,
-        )
+        _build_position_response(p, agent_name)
         for p in positions
     ]
 
@@ -251,23 +224,7 @@ async def close_position(position_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Position not found or already closed")
 
     agent = await agent_broker_service.get_agent(db, pos.agent_id)
-    return PositionResponse(
-        id=pos.id,
-        agent_id=pos.agent_id,
-        agent_name=agent.name if agent else "unknown",
-        symbol=pos.symbol,
-        side=pos.side,
-        entry_price=pos.entry_price,
-        exit_price=pos.exit_price,
-        stop_loss=pos.stop_loss,
-        take_profit=pos.take_profit,
-        quantity=pos.quantity,
-        status=pos.status,
-        pnl=pos.pnl,
-        pnl_percent=pos.pnl_percent,
-        opened_at=pos.opened_at,
-        closed_at=pos.closed_at,
-    )
+    return _build_position_response(pos, agent.name if agent else "unknown")
 
 
 # ── Logs ─────────────────────────────────────────────────────

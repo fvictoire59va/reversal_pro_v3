@@ -393,10 +393,12 @@ class RiskManagerMixin:
 
         if pos.side == "LONG" and low <= pos.stop_loss:
             triggered = True
-            realistic_exit = min(low, pos.stop_loss)
+            # In paper mode, honour the SL level exactly (no simulated slippage).
+            # In live mode, the actual fill may differ — but we don't know it here.
+            realistic_exit = pos.stop_loss
         elif pos.side == "SHORT" and high >= pos.stop_loss:
             triggered = True
-            realistic_exit = max(high, pos.stop_loss)
+            realistic_exit = pos.stop_loss
         else:
             realistic_exit = current_price
 

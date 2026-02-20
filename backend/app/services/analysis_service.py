@@ -396,15 +396,19 @@ class AnalysisService:
             candle_seconds = 60
         recent_cutoff = last_bar_time - timedelta(seconds=candle_seconds * 10)
 
-        # 1. Load existing detected_at timestamps for this symbol/timeframe
+        # 1. Load existing signals (id + detected_at) for this symbol/timeframe
+        #    Single SELECT serves both the detected_at lookup and the stale-delete step.
         existing = await db.execute(text(
-            "SELECT time, is_bullish, detected_at FROM signals "
+            "SELECT id, time, is_bullish, detected_at FROM signals "
             "WHERE symbol = :s AND timeframe = :tf"
         ), {"s": request.symbol, "tf": request.timeframe})
-        existing_map = {}
-        for row in existing.fetchall():
-            key = (row[0].replace(tzinfo=None) if row[0].tzinfo else row[0], row[1])
-            existing_map[key] = row[2]
+        existing_rows = existing.fetchall()
+        existing_map = {}   # (time_naive, is_bullish) → detected_at
+        existing_id_map = {} # (time_naive, is_bullish) → id
+        for row in existing_rows:
+            key = (row[1].replace(tzinfo=None) if row[1].tzinfo else row[1], row[2])
+            existing_map[key] = row[3]
+            existing_id_map[key] = row[0]
 
         # 2. Build upsert values list and track which signal keys we keep
         upsert_values = []
@@ -468,18 +472,12 @@ class AnalysisService:
             await db.execute(stmt)
 
         # 4. Delete stale signals no longer in the analysis result
-        #    Build a list of (time, is_bullish) pairs to keep
+        #    Reuse existing_id_map from step 1 (no extra SELECT)
         if result.signals:
-            # Delete signals for this symbol/timeframe that were NOT in the new result
-            all_existing = await db.execute(text(
-                "SELECT id, time, is_bullish FROM signals "
-                "WHERE symbol = :s AND timeframe = :tf"
-            ), {"s": request.symbol, "tf": request.timeframe})
-            ids_to_delete = []
-            for row in all_existing.fetchall():
-                row_time_naive = row[1].replace(tzinfo=None) if row[1].tzinfo else row[1]
-                if (row_time_naive, row[2]) not in kept_keys:
-                    ids_to_delete.append(row[0])
+            ids_to_delete = [
+                sid for key, sid in existing_id_map.items()
+                if key not in kept_keys
+            ]
             if ids_to_delete:
                 await db.execute(text(
                     "DELETE FROM signals WHERE id = ANY(:ids)"

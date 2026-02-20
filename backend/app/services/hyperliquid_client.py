@@ -422,5 +422,9 @@ _FALLBACK_SIZE_DECIMALS = {
     "LINK": 2, "DOT": 1, "MATIC": 0, "UNI": 2,
 }
 
-# Singleton
-hyperliquid_client = HyperliquidClient()
+# Backward-compatible singleton — delegates to centralized dependencies
+def __getattr__(name):
+    if name == "hyperliquid_client":
+        from ..dependencies import get_hyperliquid_client
+        return get_hyperliquid_client()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

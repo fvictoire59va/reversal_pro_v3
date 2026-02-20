@@ -20,9 +20,8 @@ from ..schemas import (
 )
 from ..cache import cache_get, cache_set, cache_delete
 
-# Import core engine
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+# Import core engine — reversal_pro is on PYTHONPATH via the Docker WORKDIR
+# or project root when running locally.
 from reversal_pro.domain.enums import SignalMode, SensitivityPreset, CalculationMethod
 from reversal_pro.domain.value_objects import SensitivityConfig
 from reversal_pro.domain.value_objects import OHLCVBar as CoreOHLCVBar
@@ -504,5 +503,9 @@ class AnalysisService:
         await db.commit()
 
 
-# Singleton
-analysis_service = AnalysisService()
+# Backward-compatible singleton — delegates to centralized dependencies
+def __getattr__(name):
+    if name == "analysis_service":
+        from ..dependencies import get_analysis_service
+        return get_analysis_service()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

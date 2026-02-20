@@ -9,7 +9,7 @@ from ..database import get_db
 from ..schemas import WatchlistItem, WatchlistResponse
 from ..models import Watchlist
 
-router = APIRouter(prefix="/api/watchlist", tags=["Watchlist"])
+router = APIRouter(prefix="/watchlist", tags=["Watchlist"])
 
 
 @router.get("/", response_model=WatchlistResponse)

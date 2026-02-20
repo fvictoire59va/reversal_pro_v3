@@ -305,5 +305,9 @@ class TelegramService:
             )
 
 
-# Global instance
-telegram_service = TelegramService()
+# Backward-compatible singleton — delegates to centralized dependencies
+def __getattr__(name):
+    if name == "telegram_service":
+        from ..dependencies import get_telegram_service
+        return get_telegram_service()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

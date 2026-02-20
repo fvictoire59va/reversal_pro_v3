@@ -9,7 +9,7 @@ from ..services.telegram_service import telegram_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/telegram", tags=["telegram"])
+router = APIRouter(prefix="/telegram", tags=["telegram"])
 
 
 @router.post("/webhook")

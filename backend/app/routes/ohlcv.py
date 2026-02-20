@@ -10,7 +10,7 @@ from ..services.data_ingestion import ingestion_service
 import tempfile, os
 from datetime import datetime
 
-router = APIRouter(prefix="/api/ohlcv", tags=["OHLCV Data"])
+router = APIRouter(prefix="/ohlcv", tags=["OHLCV Data"])
 
 
 @router.get("/{symbol}/{timeframe}", response_model=OHLCVResponse)

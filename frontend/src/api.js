@@ -2,7 +2,7 @@
  * API client — communicates with the FastAPI backend.
  */
 
-const API_BASE = '/api';
+const API_BASE = '/api/v1';
 
 export async function fetchChartData(symbol, timeframe, limit, sensitivity, signalMode) {
     const params = new URLSearchParams({

@@ -192,5 +192,9 @@ class DataIngestionService:
         return len(values)
 
 
-# Singleton
-ingestion_service = DataIngestionService()
+# Backward-compatible singleton — delegates to centralized dependencies
+def __getattr__(name):
+    if name == "ingestion_service":
+        from ..dependencies import get_ingestion_service
+        return get_ingestion_service()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

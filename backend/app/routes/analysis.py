@@ -9,7 +9,7 @@ from ..schemas import (
 )
 from ..services.analysis_service import analysis_service
 
-router = APIRouter(prefix="/api/analysis", tags=["Analysis"])
+router = APIRouter(prefix="/analysis", tags=["Analysis"])
 
 
 @router.post("/run", response_model=AnalysisResponse)

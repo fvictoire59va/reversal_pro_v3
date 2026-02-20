@@ -8,6 +8,14 @@ Each agent:
   3. Opens SHORT on bearish reversal, closes on bullish reversal
   4. Calculates SL from previous pivot, TP with TF-adaptive R:R (1.5–3:1)
   5. Works in paper (simulation) or live mode
+
+Recommended future decomposition (when this file grows further):
+  - AgentCrudService      — create / update / delete / list agents
+  - PositionManager       — open / close / partial-TP / breakeven logic
+  - RiskManager           — SL/TP calculation, trailing stop, R:R rules
+  - SignalEvaluator       — duplicate-check, cooldown, signal scoring
+  - AgentOrchestrator     — scheduler loop that ties the above together
+  - agent_performance.py  — already extracted (performance tree computation)
 """
 
 import asyncio
@@ -1765,5 +1773,9 @@ class AgentBrokerService:
         return round(float(result.scalar()), 4)
 
 
-# Singleton
-agent_broker_service = AgentBrokerService()
+# Backward-compatible singleton — delegates to centralized dependencies
+def __getattr__(name):
+    if name == "agent_broker_service":
+        from ..dependencies import get_agent_broker_service
+        return get_agent_broker_service()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -2,6 +2,7 @@
 Optimizer API routes — launch grid-search optimization and poll progress.
 """
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,7 +19,6 @@ router = APIRouter(prefix="/optimizer", tags=["optimizer"])
 @router.post("/start")
 async def start_optimization(
     symbol: str = "BTC/USDT",
-    db: AsyncSession = Depends(get_db),
 ):
     """Launch grid-search optimization in background.
 

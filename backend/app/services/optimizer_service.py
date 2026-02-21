@@ -376,43 +376,30 @@ class OptimizerService:
 
     async def start(self, db_factory, symbol: str = "BTC/USDT"):
         """Launch the optimization in a background asyncio task."""
-        import sys
         if self._running:
             raise RuntimeError("Optimization already running")
 
-        print(f"[OPTIMIZER] Starting optimization for {symbol}", flush=True)
         logger.info("[OPTIMIZER] Starting optimization for %s", symbol)
         self._running = True
         self._task = asyncio.create_task(
             self._safe_run(db_factory, symbol)
         )
-        # Don't await — fire and forget
         self._task.add_done_callback(self._on_done)
-        print("[OPTIMIZER] Task created and scheduled", flush=True)
 
     def _on_done(self, task: asyncio.Task):
-        import sys, traceback
         self._running = False
         exc = task.exception()
         if exc:
-            print(f"[OPTIMIZER] Task crashed: {exc}", flush=True)
-            traceback.print_exception(type(exc), exc, exc.__traceback__)
-            sys.stdout.flush()
             logger.error("[OPTIMIZER] Task crashed: %s", exc, exc_info=exc)
         else:
-            print("[OPTIMIZER] Task completed successfully", flush=True)
+            logger.info("[OPTIMIZER] Task completed successfully")
 
     async def _safe_run(self, db_factory, symbol: str):
         """Wrapper that guarantees all exceptions are logged."""
-        print(f"[OPTIMIZER] _safe_run entered for {symbol}", flush=True)
         try:
             await self._run(db_factory, symbol)
         except Exception as e:
-            import traceback
-            print(f"[OPTIMIZER] Fatal error: {e}", flush=True)
-            traceback.print_exc()
             logger.error("[OPTIMIZER] Fatal error: %s", e, exc_info=True)
-            # Save error to progress so frontend can display it
             try:
                 progress = OptimizationProgress(
                     status="error",
@@ -420,12 +407,11 @@ class OptimizerService:
                 )
                 await self._save_progress(progress)
             except Exception:
-                print("[OPTIMIZER] Could not save error to Redis", flush=True)
+                logger.error("[OPTIMIZER] Could not save error to Redis")
             raise
 
     async def _run(self, db_factory, symbol: str):
         """Main optimization loop."""
-        print(f"[OPTIMIZER] _run started for {symbol}", flush=True)
         logger.info("[OPTIMIZER] _run started for %s", symbol)
         t0 = time.perf_counter()
         total_combos = len(TIMEFRAMES) * len(SENSITIVITIES) * len(SIGNAL_MODES)
@@ -434,7 +420,6 @@ class OptimizerService:
             started_at=datetime.now(timezone.utc).isoformat(),
             total_combos=total_combos,
         )
-        print(f"[OPTIMIZER] Saving initial progress to Redis ({total_combos} combos)", flush=True)
         await self._save_progress(progress)
 
         best_per_tf: Dict[str, BacktestResult] = {}

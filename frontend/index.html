@@ -215,6 +215,9 @@
                 <span class="agent-pnl-total" id="totalPnlBadge">PnL: $0.00</span>
             </div>
             <div class="agent-broker-actions">
+                <button class="btn btn-outline btn-sm btn-optimizer" id="optimizerBtn" title="Optimiser sensitivity & signal mode par timeframe">
+                    🧪 Optimiser
+                </button>
                 <button class="btn btn-outline btn-sm btn-danger-outline" id="resetHistoryBtn" title="Purge skipped signals & closed positions (inactive agents)">
                     🗑 Reset
                 </button>
@@ -225,6 +228,22 @@
                     + Agent
                 </button>
             </div>
+        </div>
+
+        <!-- Optimizer Progress Panel (hidden by default) -->
+        <div class="optimizer-panel" id="optimizerPanel" style="display: none;">
+            <div class="optimizer-header">
+                <span class="optimizer-title">🧪 Optimisation en cours</span>
+                <button class="optimizer-close" id="optimizerCloseBtn">✕</button>
+            </div>
+            <div class="optimizer-progress">
+                <div class="optimizer-bar-container">
+                    <div class="optimizer-bar" id="optimizerBar" style="width: 0%"></div>
+                </div>
+                <span class="optimizer-pct" id="optimizerPct">0%</span>
+            </div>
+            <div class="optimizer-status" id="optimizerStatus">En attente...</div>
+            <div class="optimizer-results" id="optimizerResults"></div>
         </div>
 
         <!-- Create Agent Form (hidden by default) -->

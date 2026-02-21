@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from .config import get_settings
-from .routes import ohlcv, analysis, watchlist, agents, telegram
+from .routes import ohlcv, analysis, watchlist, agents, telegram, optimizer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -313,6 +313,7 @@ api_v1.include_router(analysis.router)
 api_v1.include_router(watchlist.router)
 api_v1.include_router(agents.router)
 api_v1.include_router(telegram.router)
+api_v1.include_router(optimizer.router)
 app.include_router(api_v1)
 
 

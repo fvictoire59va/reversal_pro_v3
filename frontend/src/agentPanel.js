@@ -7,12 +7,14 @@ import { state, setStatus } from './state.js';
 import {
     getAgentsOverview, createAgent, deleteAgent, toggleAgent,
     closePosition, getAgentPositionsForChart, resetAgentHistory,
+    startOptimization, getOptimizationProgress,
 } from './api.js';
 import { updatePerfAgentSelect } from './perfTree.js';
 import { esc, escAttr } from './escapeHtml.js';
 
 // ── Private ─────────────────────────────────────────────────
 let agentRefreshInterval = null;
+let optimizerPollInterval = null;
 
 // ── Public API ──────────────────────────────────────────────
 
@@ -50,6 +52,25 @@ export function initAgentBroker() {
     if (resetHistoryBtn) {
         resetHistoryBtn.addEventListener('click', handleResetHistory);
     }
+
+    // Optimizer button
+    const optimizerBtn = document.getElementById('optimizerBtn');
+    if (optimizerBtn) {
+        optimizerBtn.addEventListener('click', handleStartOptimizer);
+    }
+    const optimizerCloseBtn = document.getElementById('optimizerCloseBtn');
+    if (optimizerCloseBtn) {
+        optimizerCloseBtn.addEventListener('click', () => {
+            document.getElementById('optimizerPanel').style.display = 'none';
+            if (optimizerPollInterval) {
+                clearInterval(optimizerPollInterval);
+                optimizerPollInterval = null;
+            }
+        });
+    }
+
+    // Check if an optimization is already running on page load
+    checkRunningOptimization();
 
     // Initial load + auto-refresh every 30s
     setTimeout(() => loadAgentsOverview(), 1000);
@@ -105,6 +126,130 @@ async function handleResetHistory() {
     } catch (err) {
         setStatus(`Erreur reset: ${err.message}`, true);
     }
+}
+
+async function handleStartOptimizer() {
+    if (!confirm(
+        'Lancer l\'optimisation ?\n\n' +
+        'Le système va tester toutes les combinaisons\n' +
+        '(sensitivity × signal_mode) sur chaque timeframe\n' +
+        'et créer des agents inactifs avec les meilleurs paramètres.\n\n' +
+        'Cela peut prendre quelques minutes.'
+    )) return;
+
+    const btn = document.getElementById('optimizerBtn');
+    try {
+        btn.classList.add('running');
+        btn.textContent = '⏳ Optimisation...';
+        setStatus('Lancement de l\'optimisation...');
+
+        await startOptimization(state.currentSymbol);
+        showOptimizerPanel();
+        startOptimizerPolling();
+    } catch (err) {
+        btn.classList.remove('running');
+        btn.textContent = '🧪 Optimiser';
+        setStatus(`Erreur optimisation: ${err.message}`, true);
+    }
+}
+
+async function checkRunningOptimization() {
+    try {
+        const progress = await getOptimizationProgress();
+        if (progress.status === 'running') {
+            const btn = document.getElementById('optimizerBtn');
+            btn.classList.add('running');
+            btn.textContent = '⏳ Optimisation...';
+            showOptimizerPanel();
+            updateOptimizerUI(progress);
+            startOptimizerPolling();
+        }
+    } catch (_) { /* ignore */ }
+}
+
+function showOptimizerPanel() {
+    document.getElementById('optimizerPanel').style.display = 'block';
+}
+
+function startOptimizerPolling() {
+    if (optimizerPollInterval) clearInterval(optimizerPollInterval);
+    optimizerPollInterval = setInterval(async () => {
+        try {
+            const progress = await getOptimizationProgress();
+            updateOptimizerUI(progress);
+
+            if (progress.status === 'done' || progress.status === 'error') {
+                clearInterval(optimizerPollInterval);
+                optimizerPollInterval = null;
+                const btn = document.getElementById('optimizerBtn');
+                btn.classList.remove('running');
+                btn.textContent = '🧪 Optimiser';
+
+                if (progress.status === 'done') {
+                    setStatus(`Optimisation terminée en ${progress.elapsed_seconds}s`);
+                    await loadAgentsOverview();
+                } else {
+                    setStatus(`Erreur optimisation: ${progress.error}`, true);
+                }
+            }
+        } catch (err) {
+            console.warn('Optimizer poll error:', err);
+        }
+    }, 2000);
+}
+
+function updateOptimizerUI(progress) {
+    const pct = progress.total_combos > 0
+        ? Math.round((progress.current_combo / progress.total_combos) * 100)
+        : 0;
+
+    document.getElementById('optimizerBar').style.width = `${pct}%`;
+    document.getElementById('optimizerPct').textContent = `${pct}%`;
+
+    let statusText = '';
+    if (progress.status === 'running') {
+        statusText = `Analyse ${progress.current_tf || '...'} — ${progress.current_combo}/${progress.total_combos} combinaisons (${progress.elapsed_seconds}s)`;
+    } else if (progress.status === 'done') {
+        statusText = `✅ Terminé en ${progress.elapsed_seconds}s`;
+    } else if (progress.status === 'error') {
+        statusText = `❌ Erreur: ${progress.error}`;
+    }
+    document.getElementById('optimizerStatus').textContent = statusText;
+
+    // Render results
+    const resultsDiv = document.getElementById('optimizerResults');
+    const results = progress.results || {};
+    const tfKeys = Object.keys(results).filter(k => k !== '_created_agents');
+
+    if (tfKeys.length === 0) {
+        resultsDiv.innerHTML = '';
+        return;
+    }
+
+    const createdAgents = results._created_agents || [];
+
+    const html = tfKeys.map(tf => {
+        const r = results[tf];
+        const agent = createdAgents.find(a => a.timeframe === tf);
+        const agentInfo = agent
+            ? `<div class="params">${agent.action === 'updated' ? '♻️' : '✨'} ${esc(agent.name || '')}</div>`
+            : '';
+        return `
+            <div class="optimizer-result-card">
+                <div class="tf-label">${esc(tf)}</div>
+                <div class="params">🎯 ${esc(r.sensitivity)} · 📡 ${esc(r.signal_mode)}</div>
+                <div class="stats">
+                    ${r.total_trades} trades · WR ${r.win_rate}% · PF ${r.profit_factor}
+                </div>
+                <div class="stats">
+                    PnL ${r.total_pnl_pct > 0 ? '+' : ''}${r.total_pnl_pct}% · DD ${r.max_drawdown_pct}%
+                </div>
+                ${agentInfo}
+            </div>
+        `;
+    }).join('');
+
+    resultsDiv.innerHTML = html;
 }
 
 async function handleToggleAgent(agentId) {

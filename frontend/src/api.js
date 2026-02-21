@@ -159,3 +159,26 @@ export async function resetAgentHistory() {
     }
     return res.json();
 }
+
+// ── Optimizer API ───────────────────────────────────────────
+
+export async function startOptimization(symbol = 'BTC/USDT') {
+    const params = new URLSearchParams({ symbol });
+    const res = await fetch(`${API_BASE}/optimizer/start?${params}`, {
+        method: 'POST',
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const msg = typeof err.detail === 'string'
+            ? err.detail
+            : JSON.stringify(err.detail || err);
+        throw new Error(msg || `Optimizer error ${res.status}`);
+    }
+    return res.json();
+}
+
+export async function getOptimizationProgress() {
+    const res = await fetch(`${API_BASE}/optimizer/progress`);
+    if (!res.ok) return { status: 'error' };
+    return res.json();
+}

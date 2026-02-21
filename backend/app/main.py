@@ -34,84 +34,216 @@ async def lifespan(app: FastAPI):
     # Start background scheduler for auto-refresh
     if settings.auto_refresh_enabled:
         try:
+            from datetime import datetime, timezone
             from apscheduler.schedulers.asyncio import AsyncIOScheduler
             from .dependencies import get_ingestion_service, get_agent_broker_service, get_analysis_service
             from .database import get_session_factory
+            from .cache import get_redis_client
 
             scheduler = AsyncIOScheduler()
 
-            async def auto_fetch():
-                async with get_session_factory()() as db:
-                    try:
-                        report = await get_ingestion_service().fetch_all_watchlist(db)
-                        logger.info(f"Auto-refresh completed: {report}")
-                    except Exception as e:
-                        logger.error(f"Auto-refresh error: {e}")
+            # ── Timeframe → seconds lookup ──
+            TF_SECONDS = {
+                "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
+                "1h": 3600, "4h": 14400, "1d": 86400,
+            }
+            HTF_MAP = {
+                "1m": ["5m"], "5m": ["15m"], "15m": ["1h"],
+                "30m": ["1h"], "1h": ["4h"], "4h": ["1d"], "1d": [],
+            }
 
-            async def auto_analyze_and_run_agents():
-                """Re-run analysis for all watchlist symbols, then run agents."""
+            _pipeline_run_count = 0
+
+            async def autonomous_pipeline():
+                """
+                Unified autonomous pipeline — SEQUENTIAL execution:
+                  1. Fetch OHLCV data  (throttled per symbol/timeframe)
+                  2. Run analysis      (only for pairs with fresh data)
+                  3. Run all agents    (always — for SL/TP monitoring)
+
+                Merges watchlist + active agent pairs so agents are
+                fully autonomous even when nobody is on the frontend.
+                """
+                nonlocal _pipeline_run_count
+                _pipeline_run_count += 1
+                pipeline_start = time.perf_counter()
+                is_startup = (_pipeline_run_count == 1)
+                label = "STARTUP" if is_startup else f"CYCLE #{_pipeline_run_count}"
+
+                logger.info(f"[PIPELINE] ═══ {label} starting ═══")
+
                 try:
+                    redis = get_redis_client()
+
                     async with get_session_factory()() as db:
+                        # ── Collect ALL (symbol, timeframe) pairs ──
+                        wl_result = await db.execute(text(
+                            "SELECT symbol, timeframe, exchange "
+                            "FROM watchlist WHERE is_active = TRUE"
+                        ))
+                        watchlist_rows = wl_result.fetchall()
+
+                        agent_result = await db.execute(text(
+                            "SELECT DISTINCT symbol, timeframe "
+                            "FROM agents WHERE is_active = TRUE"
+                        ))
+                        agent_rows = agent_result.fetchall()
+
+                        # Merge: (symbol, tf) → exchange
+                        all_pairs = {}
+                        for row in watchlist_rows:
+                            all_pairs[(row[0], row[1])] = row[2]
+                        for row in agent_rows:
+                            if (row[0], row[1]) not in all_pairs:
+                                all_pairs[(row[0], row[1])] = settings.default_exchange
+
+                        # Also include HTFs for each pair
+                        htf_pairs = {}
+                        for (symbol, tf) in list(all_pairs.keys()):
+                            for htf in HTF_MAP.get(tf, []):
+                                if (symbol, htf) not in all_pairs:
+                                    htf_pairs[(symbol, htf)] = settings.default_exchange
+                        all_pairs.update(htf_pairs)
+
+                        if not all_pairs:
+                            logger.debug("[PIPELINE] No active watchlist or agents")
+                            return
+
+                        # ── STEP 1: Fetch OHLCV data (throttled per TF) ──
+                        fetched_pairs = set()
+                        for (symbol, tf), exchange_id in all_pairs.items():
+                            throttle_key = f"pipeline_fetch:{symbol}:{tf}"
+                            tf_seconds = TF_SECONDS.get(tf, 300)
+                            # On startup: ignore throttle, always fetch
+                            if not is_startup and await redis.get(throttle_key):
+                                continue
+
+                            fetch_ttl = max(tf_seconds - 15, 30)
+                            try:
+                                count = await get_ingestion_service().fetch_and_store(
+                                    db, symbol=symbol, timeframe=tf,
+                                    exchange_id=exchange_id, limit=500,
+                                )
+                                fetched_pairs.add((symbol, tf))
+                                await redis.setex(throttle_key, fetch_ttl, "1")
+                                logger.info(
+                                    f"[PIPELINE] Fetched {count} bars: "
+                                    f"{symbol} {tf}"
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"[PIPELINE] Fetch error {symbol}/{tf}: {e}"
+                                )
+
+                        # ── STEP 2: Run analysis (for pairs with fresh data) ──
+                        from .schemas import AnalysisRequest
+
+                        analyzed = 0
+                        for symbol, tf in fetched_pairs:
+                            try:
+                                # Use agent-specific params when available
+                                agent_params = await db.execute(text(
+                                    "SELECT sensitivity, signal_mode, "
+                                    "       analysis_limit "
+                                    "FROM agents "
+                                    "WHERE symbol = :s AND timeframe = :tf "
+                                    "  AND is_active = TRUE "
+                                    "ORDER BY created_at LIMIT 1"
+                                ), {"s": symbol, "tf": tf})
+                                agent_row = agent_params.fetchone()
+
+                                if agent_row:
+                                    request = AnalysisRequest(
+                                        symbol=symbol, timeframe=tf,
+                                        limit=agent_row[2],
+                                        sensitivity=agent_row[0],
+                                        signal_mode=agent_row[1],
+                                    )
+                                else:
+                                    request = AnalysisRequest(
+                                        symbol=symbol, timeframe=tf,
+                                    )
+
+                                await get_analysis_service().run_analysis(
+                                    db, request
+                                )
+                                analyzed += 1
+                            except Exception as e:
+                                logger.warning(
+                                    f"[PIPELINE] Analysis error "
+                                    f"{symbol}/{tf}: {e}"
+                                )
+
+                        logger.info(
+                            f"[PIPELINE] Fetched {len(fetched_pairs)} pairs, "
+                            f"analyzed {analyzed}"
+                        )
+
+                        # ── STEP 3: Run all active agents ──
                         try:
-                            from .schemas import AnalysisRequest
-
-                            # Get all active watchlist items
-                            result = await db.execute(
-                                text("SELECT symbol, timeframe FROM watchlist WHERE is_active = TRUE")
-                            )
-                            rows = result.fetchall()
-
-                            # Re-run analysis for each
-                            for row in rows:
-                                try:
-                                    request = AnalysisRequest(symbol=row[0], timeframe=row[1])
-                                    await get_analysis_service().run_analysis(db, request)
-                                except Exception as e:
-                                    logger.warning(f"Auto-analysis error for {row[0]} {row[1]}: {e}")
-
-                            # Run all active agents (each gets its own DB session)
                             await get_agent_broker_service().run_all_active_agents(db)
-
                         except Exception as e:
-                            logger.error(f"Auto-analyze/agents error: {e}", exc_info=True)
-                except Exception as e:
-                    logger.critical(f"SCHEDULER JOB CRASHED: {e}", exc_info=True)
+                            logger.error(
+                                f"[PIPELINE] Agent cycle error: {e}",
+                                exc_info=True,
+                            )
 
-            scheduler.add_job(
-                auto_fetch, "interval",
-                minutes=settings.auto_refresh_interval_minutes,
-                id="auto_fetch",
-                max_instances=1,
-                misfire_grace_time=120,  # tolerate up to 2 min delay
-                coalesce=True,           # if multiple missed, run once
+                except Exception as e:
+                    logger.critical(
+                        f"[PIPELINE] CRASHED: {e}", exc_info=True
+                    )
+                finally:
+                    elapsed = time.perf_counter() - pipeline_start
+                    logger.info(
+                        f"[PIPELINE] ═══ {label} done in {elapsed:.1f}s ═══"
+                    )
+                    # Heartbeat key — used by /health to verify scheduler
+                    try:
+                        redis = get_redis_client()
+                        await redis.setex(
+                            "pipeline_heartbeat",
+                            600,  # 10-min TTL
+                            datetime.now(timezone.utc).isoformat(),
+                        )
+                    except Exception:
+                        pass
+
+            # Schedule the unified pipeline
+            pipeline_interval = min(
+                settings.auto_refresh_interval_minutes,
+                settings.agent_cycle_interval_minutes,
             )
 
-            # Agent cycle runs after fetch to allow data to settle
             scheduler.add_job(
-                auto_analyze_and_run_agents, "interval",
-                minutes=settings.agent_cycle_interval_minutes,
-                id="agent_cycle",
+                autonomous_pipeline, "interval",
+                minutes=pipeline_interval,
+                id="autonomous_pipeline",
                 max_instances=1,
-                misfire_grace_time=120,
+                misfire_grace_time=180,
                 coalesce=True,
+                # Fire immediately on startup to catch up
+                next_run_time=datetime.now(timezone.utc),
             )
 
             scheduler.start()
+            app.state.scheduler = scheduler  # prevent GC, enable health check
+
             logger.info(
-                f"Auto-refresh scheduler started "
-                f"(every {settings.auto_refresh_interval_minutes} min)"
-            )
-            logger.info(
-                f"Agent broker scheduler started "
-                f"(every {settings.agent_cycle_interval_minutes} min)"
+                f"[PIPELINE] Autonomous scheduler started "
+                f"(every {pipeline_interval} min, immediate first run)"
             )
         except Exception as e:
             logger.warning(f"Scheduler not started: {e}")
 
     yield  # App is running
 
-    # Cleanup: close async exchange sessions
+    # Cleanup
     logger.info("Shutting down...")
+    if hasattr(app, "state") and hasattr(app.state, "scheduler"):
+        try:
+            app.state.scheduler.shutdown(wait=False)
+        except Exception:
+            pass
     try:
         from .dependencies import get_ingestion_service
         await get_ingestion_service().close_exchanges()
@@ -197,7 +329,7 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Deep health check — verifies database and Redis connectivity."""
+    """Deep health check — verifies database, Redis, and scheduler."""
     checks = {}
 
     # Database check
@@ -212,12 +344,31 @@ async def health():
     # Redis check
     try:
         from .cache import get_redis_client
-        await get_redis_client().ping()
+        redis = get_redis_client()
+        await redis.ping()
         checks["redis"] = "ok"
     except Exception as e:
         checks["redis"] = f"error: {e}"
 
-    all_ok = all(v == "ok" for v in checks.values())
+    # Scheduler / pipeline check — heartbeat written by autonomous_pipeline
+    try:
+        from .cache import get_redis_client
+        redis = get_redis_client()
+        heartbeat = await redis.get("pipeline_heartbeat")
+        if heartbeat:
+            checks["scheduler"] = f"ok (last: {heartbeat.decode() if isinstance(heartbeat, bytes) else heartbeat})"
+        else:
+            # Might just not have run yet on fresh start
+            sched = getattr(getattr(app, "state", None), "scheduler", None)
+            if sched and sched.running:
+                checks["scheduler"] = "ok (starting)"
+            else:
+                checks["scheduler"] = "warning: no heartbeat"
+    except Exception as e:
+        checks["scheduler"] = f"error: {e}"
+
+    core_checks = {k: v for k, v in checks.items() if k in ("database", "redis")}
+    all_ok = all(v.startswith("ok") for v in core_checks.values())
     return JSONResponse(
         status_code=200 if all_ok else 503,
         content={

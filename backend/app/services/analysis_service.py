@@ -394,7 +394,14 @@ class AnalysisService:
             ).total_seconds()
         else:
             candle_seconds = 60
-        recent_cutoff = last_bar_time - timedelta(seconds=candle_seconds * 10)
+
+        # Ghost-signal cutoff: only applies on FIRST-EVER analysis for this
+        # symbol/timeframe (no existing signals in DB).  On subsequent runs,
+        # any NEW signal is genuinely new (the scheduler was running) →
+        # detected_at = now so agents can act on it immediately.
+        # On first analysis the cutoff is generous (100 candles) to cover
+        # startup on historical data without marking recent signals as ghosts.
+        recent_cutoff = last_bar_time - timedelta(seconds=candle_seconds * 100)
 
         # 1. Load existing signals (id + detected_at) for this symbol/timeframe
         #    Single SELECT serves both the detected_at lookup and the stale-delete step.
@@ -409,6 +416,10 @@ class AnalysisService:
             key = (row[1].replace(tzinfo=None) if row[1].tzinfo else row[1], row[2])
             existing_map[key] = row[3]
             existing_id_map[key] = row[0]
+
+        # If this symbol/TF already has signals in DB, the system was running
+        # → any brand-new signal is genuinely fresh.
+        first_analysis = len(existing_rows) == 0
 
         # 2. Build upsert values list and track which signal keys we keep
         upsert_values = []
@@ -427,14 +438,27 @@ class AnalysisService:
             original_detected = existing_map.get(key)
 
             if not original_detected:
-                cutoff_naive = recent_cutoff.replace(tzinfo=None) if recent_cutoff.tzinfo else recent_cutoff
-                if sig_time_naive >= cutoff_naive:
-                    detected_at = now
+                if first_analysis:
+                    # First-ever analysis: backdate old signals to prevent
+                    # agents from acting on ancient historical reversals.
+                    cutoff_naive = recent_cutoff.replace(tzinfo=None) if recent_cutoff.tzinfo else recent_cutoff
+                    if sig_time_naive >= cutoff_naive:
+                        detected_at = now
+                    else:
+                        detected_at = sig_time
+                        logger.debug(
+                            f"Ghost signal (first analysis): {sig_time} "
+                            f"{'LONG' if sig.is_bullish else 'SHORT'} "
+                            f"(older than cutoff {cutoff_naive})"
+                        )
                 else:
-                    detected_at = sig_time
-                    logger.debug(
-                        f"Ghost signal ignored: {sig_time} {'LONG' if sig.is_bullish else 'SHORT'} "
-                        f"(older than cutoff {cutoff_naive})"
+                    # Ongoing operations: system was running, this signal is
+                    # genuinely new → detected_at = now so agents can act.
+                    detected_at = now
+                    logger.info(
+                        f"New signal detected: {sig_time} "
+                        f"{'LONG' if sig.is_bullish else 'SHORT'} "
+                        f"price={sig.price:.2f} detected_at={now}"
                     )
             else:
                 detected_at = original_detected

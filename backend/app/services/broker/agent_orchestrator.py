@@ -28,9 +28,10 @@ class AgentOrchestratorMixin:
     async def run_agent_cycle(self, db: AsyncSession, agent: Agent):
         """
         Execute one cycle of the agent's trading logic:
-        1. Refresh analysis (signals) for the agent's symbol / timeframe
-        2. Get the latest signal
-        3. Decide whether to open / close positions
+        1. Fetch fresh OHLCV data for the agent's symbol / timeframe
+        2. Refresh analysis (signals)
+        3. Get the latest signal
+        4. Decide whether to open / close positions
         """
         lock_key = f"agent_cycle_lock:{agent.id}"
         lock = self._redis.lock(lock_key, timeout=120, blocking=False)
@@ -42,6 +43,27 @@ class AgentOrchestratorMixin:
 
         try:
             logger.info(f"[{agent.name}] Running cycle for {agent.symbol} {agent.timeframe}")
+
+            # 0. Fetch fresh data for agent's own timeframe -----------
+            #    Throttled via Redis to match the candle interval.
+            fetch_throttle_key = f"agent_fetch:{agent.id}:{agent.timeframe}"
+            tf_seconds = TIMEFRAME_SECONDS.get(agent.timeframe, 300)
+            fetch_ttl = max(tf_seconds - 15, 30)
+
+            if not await self._redis.get(fetch_throttle_key):
+                try:
+                    from ..data_ingestion import ingestion_service
+                    count = await ingestion_service.fetch_and_store(
+                        db, symbol=agent.symbol, timeframe=agent.timeframe,
+                        exchange_id="binance", limit=500,
+                    )
+                    await self._redis.setex(fetch_throttle_key, fetch_ttl, "1")
+                    logger.info(
+                        f"[{agent.name}] Fetched {count} bars for "
+                        f"{agent.symbol} {agent.timeframe}"
+                    )
+                except Exception as e:
+                    logger.warning(f"[{agent.name}] Data fetch failed: {e}")
 
             # 1. Run fresh analysis ----------------------------------
             from ...schemas import AnalysisRequest

@@ -379,6 +379,74 @@ async def get_positions_for_chart(
     return {"positions": positions}
 
 
+# ── Reset History ────────────────────────────────────────────
+
+@router.delete("/reset-history")
+async def reset_agent_history(
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete skipped-signal logs and closed positions not belonging to active agents.
+
+    Specifically removes:
+      1. All TRADE_SKIPPED logs for inactive agents
+      2. All TRADE_SKIPPED logs for active agents (the grey markers)
+      3. All CLOSED/STOPPED positions for inactive agents
+      4. Old logs (CYCLE_ERROR, etc.) for inactive agents
+    """
+    from sqlalchemy import text
+
+    # 1. Get active agent IDs
+    active_result = await db.execute(text(
+        "SELECT id FROM agents WHERE is_active = TRUE"
+    ))
+    active_ids = [r[0] for r in active_result.fetchall()]
+
+    deleted = {}
+
+    # 2. Delete ALL TRADE_SKIPPED logs (grey markers) — they are purely informational
+    res = await db.execute(text(
+        "DELETE FROM agent_logs WHERE action = 'TRADE_SKIPPED'"
+    ))
+    deleted["skipped_logs"] = res.rowcount
+
+    # 3. Delete closed/stopped positions NOT belonging to active agents
+    if active_ids:
+        res = await db.execute(text(
+            "DELETE FROM agent_positions "
+            "WHERE status IN ('CLOSED', 'STOPPED') "
+            "  AND agent_id != ALL(:active_ids)"
+        ), {"active_ids": active_ids})
+    else:
+        res = await db.execute(text(
+            "DELETE FROM agent_positions "
+            "WHERE status IN ('CLOSED', 'STOPPED')"
+        ))
+    deleted["closed_positions_inactive"] = res.rowcount
+
+    # 4. Delete old logs for inactive agents (keep active agent logs)
+    if active_ids:
+        res = await db.execute(text(
+            "DELETE FROM agent_logs "
+            "WHERE agent_id != ALL(:active_ids)"
+        ), {"active_ids": active_ids})
+    else:
+        res = await db.execute(text(
+            "DELETE FROM agent_logs"
+        ))
+    deleted["logs_inactive_agents"] = res.rowcount
+
+    await db.commit()
+
+    total = sum(deleted.values())
+    logger.info(f"Reset history: {deleted} (total {total} rows deleted)")
+
+    return {
+        "status": "ok",
+        "deleted": deleted,
+        "total_deleted": total,
+    }
+
+
 # ── Skipped Signals (for chart grey markers) ────────────────
 
 @router.get("/skipped-signals/{symbol}/{timeframe}")

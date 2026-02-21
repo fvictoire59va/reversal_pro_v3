@@ -6,7 +6,7 @@
 import { state, setStatus } from './state.js';
 import {
     getAgentsOverview, createAgent, deleteAgent, toggleAgent,
-    closePosition, getAgentPositionsForChart,
+    closePosition, getAgentPositionsForChart, resetAgentHistory,
 } from './api.js';
 import { updatePerfAgentSelect } from './perfTree.js';
 import { esc, escAttr } from './escapeHtml.js';
@@ -45,6 +45,12 @@ export function initAgentBroker() {
     createBtn.addEventListener('click', handleCreateAgent);
     refreshAgentsBtn.addEventListener('click', loadAgentsOverview);
 
+    // Reset history button
+    const resetHistoryBtn = document.getElementById('resetHistoryBtn');
+    if (resetHistoryBtn) {
+        resetHistoryBtn.addEventListener('click', handleResetHistory);
+    }
+
     // Initial load + auto-refresh every 30s
     setTimeout(() => loadAgentsOverview(), 1000);
     agentRefreshInterval = setInterval(loadAgentsOverview, 30000);
@@ -74,6 +80,30 @@ async function handleCreateAgent() {
         await loadAgentsOverview();
     } catch (err) {
         setStatus(`Error creating agent: ${err.message}`, true);
+    }
+}
+
+async function handleResetHistory() {
+    if (!confirm(
+        'Supprimer :\n' +
+        '• Tous les signaux ignorés (marqueurs gris)\n' +
+        '• Positions fermées des agents inactifs\n' +
+        '• Logs des agents inactifs\n\n' +
+        'Les agents actifs et leurs positions ouvertes ne sont pas affectés.'
+    )) return;
+
+    try {
+        setStatus('Purge en cours...');
+        const result = await resetAgentHistory();
+        setStatus(
+            `Reset OK — ${result.total_deleted} entrées supprimées ` +
+            `(${result.deleted.skipped_logs} logs skip, ` +
+            `${result.deleted.closed_positions_inactive} positions, ` +
+            `${result.deleted.logs_inactive_agents} logs inactifs)`
+        );
+        await loadAgentsOverview();
+    } catch (err) {
+        setStatus(`Erreur reset: ${err.message}`, true);
     }
 }
 

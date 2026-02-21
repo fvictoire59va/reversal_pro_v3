@@ -145,3 +145,14 @@ export async function getSkippedSignalsForChart(symbol, timeframe) {
     if (!res.ok) return { skipped_signals: [] };
     return res.json();
 }
+
+export async function resetAgentHistory() {
+    const res = await fetch(`${API_BASE}/agents/reset-history`, {
+        method: 'DELETE',
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Reset error ${res.status}`);
+    }
+    return res.json();
+}

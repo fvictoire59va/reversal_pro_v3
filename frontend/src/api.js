@@ -152,7 +152,10 @@ export async function resetAgentHistory() {
     });
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `Reset error ${res.status}`);
+        const msg = typeof err.detail === 'string'
+            ? err.detail
+            : JSON.stringify(err.detail || err);
+        throw new Error(msg || `Reset error ${res.status}`);
     }
     return res.json();
 }

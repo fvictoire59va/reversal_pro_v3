@@ -414,7 +414,7 @@ async def reset_agent_history(
         res = await db.execute(text(
             "DELETE FROM agent_positions "
             "WHERE status IN ('CLOSED', 'STOPPED') "
-            "  AND agent_id != ALL(:active_ids)"
+            "  AND NOT (agent_id = ANY(:active_ids))"
         ), {"active_ids": active_ids})
     else:
         res = await db.execute(text(
@@ -427,7 +427,7 @@ async def reset_agent_history(
     if active_ids:
         res = await db.execute(text(
             "DELETE FROM agent_logs "
-            "WHERE agent_id != ALL(:active_ids)"
+            "WHERE NOT (agent_id = ANY(:active_ids))"
         ), {"active_ids": active_ids})
     else:
         res = await db.execute(text(

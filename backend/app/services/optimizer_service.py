@@ -379,20 +379,40 @@ class OptimizerService:
         if self._running:
             raise RuntimeError("Optimization already running")
 
+        logger.info("[OPTIMIZER] Starting optimization for %s", symbol)
         self._running = True
         self._task = asyncio.create_task(
-            self._run(db_factory, symbol)
+            self._safe_run(db_factory, symbol)
         )
         # Don't await — fire and forget
         self._task.add_done_callback(self._on_done)
 
     def _on_done(self, task: asyncio.Task):
         self._running = False
-        if task.exception():
-            logger.error(f"Optimizer crashed: {task.exception()}", exc_info=task.exception())
+        exc = task.exception()
+        if exc:
+            logger.error("[OPTIMIZER] Task crashed: %s", exc, exc_info=exc)
+
+    async def _safe_run(self, db_factory, symbol: str):
+        """Wrapper that guarantees all exceptions are logged."""
+        try:
+            await self._run(db_factory, symbol)
+        except Exception as e:
+            logger.error("[OPTIMIZER] Fatal error: %s", e, exc_info=True)
+            # Save error to progress so frontend can display it
+            try:
+                progress = OptimizationProgress(
+                    status="error",
+                    error=str(e),
+                )
+                await self._save_progress(progress)
+            except Exception:
+                logger.error("[OPTIMIZER] Could not save error to Redis")
+            raise
 
     async def _run(self, db_factory, symbol: str):
         """Main optimization loop."""
+        logger.info("[OPTIMIZER] _run started for %s", symbol)
         t0 = time.perf_counter()
         total_combos = len(TIMEFRAMES) * len(SENSITIVITIES) * len(SIGNAL_MODES)
         progress = OptimizationProgress(
@@ -400,6 +420,7 @@ class OptimizerService:
             started_at=datetime.now(timezone.utc).isoformat(),
             total_combos=total_combos,
         )
+        logger.info("[OPTIMIZER] Saving initial progress to Redis (%d combos)", total_combos)
         await self._save_progress(progress)
 
         best_per_tf: Dict[str, BacktestResult] = {}

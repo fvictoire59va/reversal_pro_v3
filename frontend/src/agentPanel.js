@@ -53,10 +53,10 @@ export function initAgentBroker() {
         resetHistoryBtn.addEventListener('click', handleResetHistory);
     }
 
-    // Optimizer button
+    // Optimizer button → show config panel
     const optimizerBtn = document.getElementById('optimizerBtn');
     if (optimizerBtn) {
-        optimizerBtn.addEventListener('click', handleStartOptimizer);
+        optimizerBtn.addEventListener('click', handleShowOptimizerConfig);
     }
     const optimizerCloseBtn = document.getElementById('optimizerCloseBtn');
     if (optimizerCloseBtn) {
@@ -68,6 +68,9 @@ export function initAgentBroker() {
             }
         });
     }
+
+    // Optimizer config panel wiring
+    initOptimizerConfigPanel();
 
     // Check if an optimization is already running on page load
     checkRunningOptimization();
@@ -128,14 +131,99 @@ async function handleResetHistory() {
     }
 }
 
-async function handleStartOptimizer() {
-    if (!confirm(
-        'Lancer l\'optimisation ?\n\n' +
-        'Le système va tester toutes les combinaisons\n' +
-        '(sensitivity × signal_mode) sur chaque timeframe\n' +
-        'et créer des agents inactifs avec les meilleurs paramètres.\n\n' +
-        'Cela peut prendre quelques minutes.'
-    )) return;
+// ── Optimizer config panel ──────────────────────────────────────
+
+// Grid sizes (must match backend constants for combo count preview)
+const _GRID = {
+    timeframes:        ['1m','5m','15m','1h','4h','1d'],
+    sensitivity:       ['Very High','High','Medium','Low','Very Low'],
+    signal_mode:       ['Confirmed Only','Confirmed + Preview'],
+    confirmation_bars: [0,1,2],
+    atr_length:        [3,5,7],
+    average_length:    [3,5,7],
+    absolute_reversal: [0.3,0.5,0.8],
+};
+
+function initOptimizerConfigPanel() {
+    // Each lock checkbox enables/disables its value input
+    const pairs = [
+        ['optLockTf',   'optTfValue'],
+        ['optLockSens', 'optSensValue'],
+        ['optLockMode', 'optModeValue'],
+        ['optLockCb',   'optCbValue'],
+        ['optLockAtr',  'optAtrValue'],
+        ['optLockAvg',  'optAvgValue'],
+        ['optLockAbs',  'optAbsValue'],
+    ];
+    for (const [cbId, valId] of pairs) {
+        const cb = document.getElementById(cbId);
+        const val = document.getElementById(valId);
+        if (!cb || !val) continue;
+        cb.addEventListener('change', () => {
+            val.disabled = !cb.checked;
+            updateComboCount();
+        });
+    }
+
+    const closeBtn = document.getElementById('optimizerConfigCloseBtn');
+    if (closeBtn) closeBtn.addEventListener('click', () => {
+        document.getElementById('optimizerConfigPanel').style.display = 'none';
+    });
+    const cancelBtn = document.getElementById('optCancelBtn');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => {
+        document.getElementById('optimizerConfigPanel').style.display = 'none';
+    });
+    const launchBtn = document.getElementById('optLaunchBtn');
+    if (launchBtn) launchBtn.addEventListener('click', handleLaunchOptimizer);
+}
+
+function updateComboCount() {
+    const l = (locked, gridKey) => locked ? 1 : _GRID[gridKey].length;
+    const tfLocked = document.getElementById('optLockTf')?.checked;
+    const tfCount = tfLocked
+        ? [...document.getElementById('optTfValue').selectedOptions].length || 1
+        : _GRID.timeframes.length;
+    const combos = tfCount
+        * l(document.getElementById('optLockSens')?.checked,  'sensitivity')
+        * l(document.getElementById('optLockMode')?.checked,  'signal_mode')
+        * l(document.getElementById('optLockCb')?.checked,    'confirmation_bars')
+        * l(document.getElementById('optLockAtr')?.checked,   'atr_length')
+        * l(document.getElementById('optLockAvg')?.checked,   'average_length')
+        * l(document.getElementById('optLockAbs')?.checked,   'absolute_reversal');
+
+    const el = document.getElementById('optComboCount');
+    if (el) el.textContent = `≈ ${combos.toLocaleString()} combinaisons`;
+}
+
+function getFixedParams() {
+    const p = {};
+    if (document.getElementById('optLockTf')?.checked) {
+        const sel = document.getElementById('optTfValue');
+        p.timeframes = [...sel.selectedOptions].map(o => o.value);
+    }
+    if (document.getElementById('optLockSens')?.checked)
+        p.sensitivity = document.getElementById('optSensValue').value;
+    if (document.getElementById('optLockMode')?.checked)
+        p.signal_mode = document.getElementById('optModeValue').value;
+    if (document.getElementById('optLockCb')?.checked)
+        p.confirmation_bars = parseInt(document.getElementById('optCbValue').value, 10);
+    if (document.getElementById('optLockAtr')?.checked)
+        p.atr_length = parseInt(document.getElementById('optAtrValue').value, 10);
+    if (document.getElementById('optLockAvg')?.checked)
+        p.average_length = parseInt(document.getElementById('optAvgValue').value, 10);
+    if (document.getElementById('optLockAbs')?.checked)
+        p.absolute_reversal = parseFloat(document.getElementById('optAbsValue').value);
+    return p;
+}
+
+function handleShowOptimizerConfig() {
+    updateComboCount();
+    document.getElementById('optimizerConfigPanel').style.display = 'block';
+}
+
+async function handleLaunchOptimizer() {
+    const fixedParams = getFixedParams();
+    document.getElementById('optimizerConfigPanel').style.display = 'none';
 
     const btn = document.getElementById('optimizerBtn');
     try {
@@ -143,7 +231,7 @@ async function handleStartOptimizer() {
         btn.textContent = '⏳ Optimisation...';
         setStatus('Lancement de l\'optimisation...');
 
-        await startOptimization(state.currentSymbol);
+        await startOptimization(state.currentSymbol, fixedParams);
         showOptimizerPanel();
         startOptimizerPolling();
     } catch (err) {
@@ -238,6 +326,9 @@ function updateOptimizerUI(progress) {
             <div class="optimizer-result-card">
                 <div class="tf-label">${esc(tf)}</div>
                 <div class="params">🎯 ${esc(r.sensitivity)} · 📡 ${esc(r.signal_mode)}</div>
+                <div class="params" style="font-size:0.72rem">
+                    CB=${r.confirmation_bars} · ATR=${r.atr_length} · AVG=${r.average_length} · AbsR=${r.absolute_reversal}
+                </div>
                 <div class="stats">
                     ${r.total_trades} trades · WR ${r.win_rate}% · PF ${r.profit_factor}
                 </div>

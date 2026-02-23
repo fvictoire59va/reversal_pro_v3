@@ -313,6 +313,47 @@ body {
     font-size: 0.75rem;
 }
 
+/* ── Optimizer Config Grid ───────────────────────────── */
+.opti-config-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 12px;
+}
+.opti-cfg-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.opti-cfg-check {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.82rem;
+    white-space: nowrap;
+    min-width: 120px;
+    cursor: pointer;
+}
+.opti-cfg-check input[type="checkbox"] {
+    accent-color: var(--blue, #4488ff);
+}
+.opti-cfg-row select,
+.opti-cfg-row input {
+    flex: 1;
+    padding: 3px 6px;
+    font-size: 0.8rem;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary, #222);
+    color: var(--text-primary);
+}
+.opti-cfg-row select:disabled,
+.opti-cfg-row input:disabled {
+    opacity: 0.4;
+}
+.opti-cfg-row select[multiple] {
+    min-height: 50px;
+}
+
 .btn-live {
     background: var(--bg-secondary);
     border: 1px solid var(--border);

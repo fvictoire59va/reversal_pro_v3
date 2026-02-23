@@ -244,3 +244,22 @@ class AgentsOverview(BaseModel):
     active_agents: int
     total_open_positions: int
     total_realized_pnl: float
+
+
+# ── Optimizer ───────────────────────────────────────────────────
+class OptimizerStartRequest(BaseModel):
+    """Parameters for starting the optimizer.
+
+    Every field is optional.  When a field is provided the optimizer
+    locks that parameter to the given value instead of grid-searching it.
+    When absent / null the full grid is explored.
+    """
+    symbol: str = "BTC/USDT"
+    # Lockable grid parameters
+    sensitivity: Optional[str] = None
+    signal_mode: Optional[str] = None
+    confirmation_bars: Optional[int] = None
+    atr_length: Optional[int] = None
+    average_length: Optional[int] = None
+    absolute_reversal: Optional[float] = None
+    timeframes: Optional[List[str]] = None

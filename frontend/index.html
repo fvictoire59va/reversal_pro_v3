@@ -231,6 +231,119 @@
         </div>
 
         <!-- Optimizer Progress Panel (hidden by default) -->
+        <!-- Optimizer Config Form (hidden by default) -->
+        <div class="optimizer-panel" id="optimizerConfigPanel" style="display: none;">
+            <div class="optimizer-header">
+                <span class="optimizer-title">🧪 Configuration de l'optimisation</span>
+                <button class="optimizer-close" id="optimizerConfigCloseBtn">✕</button>
+            </div>
+            <p style="font-size:0.82rem;color:var(--text-secondary);margin:0 0 8px">
+                Cochez un paramètre pour <strong>fixer</strong> sa valeur.
+                Les paramètres non cochés seront explorés (grid-search).
+            </p>
+            <div class="opti-config-grid">
+                <!-- Timeframes (multi-select) -->
+                <div class="opti-cfg-row">
+                    <label class="opti-cfg-check">
+                        <input type="checkbox" id="optLockTf" />
+                        <span>Timeframes</span>
+                    </label>
+                    <select id="optTfValue" multiple size="3" disabled>
+                        <option value="1m">1m</option>
+                        <option value="5m">5m</option>
+                        <option value="15m">15m</option>
+                        <option value="1h" selected>1h</option>
+                        <option value="4h">4h</option>
+                        <option value="1d">1d</option>
+                    </select>
+                </div>
+                <!-- Sensitivity -->
+                <div class="opti-cfg-row">
+                    <label class="opti-cfg-check">
+                        <input type="checkbox" id="optLockSens" />
+                        <span>Sensitivity</span>
+                    </label>
+                    <select id="optSensValue" disabled>
+                        <option value="Very High">Very High</option>
+                        <option value="High">High</option>
+                        <option value="Medium" selected>Medium</option>
+                        <option value="Low">Low</option>
+                        <option value="Very Low">Very Low</option>
+                    </select>
+                </div>
+                <!-- Signal Mode -->
+                <div class="opti-cfg-row">
+                    <label class="opti-cfg-check">
+                        <input type="checkbox" id="optLockMode" />
+                        <span>Signal Mode</span>
+                    </label>
+                    <select id="optModeValue" disabled>
+                        <option value="Confirmed Only" selected>Confirmed Only</option>
+                        <option value="Confirmed + Preview">Confirmed + Preview</option>
+                    </select>
+                </div>
+                <!-- Confirmation Bars -->
+                <div class="opti-cfg-row">
+                    <label class="opti-cfg-check">
+                        <input type="checkbox" id="optLockCb" />
+                        <span>Confirm. Bars</span>
+                    </label>
+                    <select id="optCbValue" disabled>
+                        <option value="0" selected>0</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                    </select>
+                </div>
+                <!-- ATR Length -->
+                <div class="opti-cfg-row">
+                    <label class="opti-cfg-check">
+                        <input type="checkbox" id="optLockAtr" />
+                        <span>ATR Length</span>
+                    </label>
+                    <select id="optAtrValue" disabled>
+                        <option value="3">3</option>
+                        <option value="5" selected>5</option>
+                        <option value="7">7</option>
+                        <option value="10">10</option>
+                    </select>
+                </div>
+                <!-- Average Length -->
+                <div class="opti-cfg-row">
+                    <label class="opti-cfg-check">
+                        <input type="checkbox" id="optLockAvg" />
+                        <span>Average Length</span>
+                    </label>
+                    <select id="optAvgValue" disabled>
+                        <option value="3">3</option>
+                        <option value="5" selected>5</option>
+                        <option value="7">7</option>
+                        <option value="10">10</option>
+                    </select>
+                </div>
+                <!-- Absolute Reversal -->
+                <div class="opti-cfg-row">
+                    <label class="opti-cfg-check">
+                        <input type="checkbox" id="optLockAbs" />
+                        <span>Absolute Rev.</span>
+                    </label>
+                    <select id="optAbsValue" disabled>
+                        <option value="0.2">0.2</option>
+                        <option value="0.3">0.3</option>
+                        <option value="0.5" selected>0.5</option>
+                        <option value="0.8">0.8</option>
+                        <option value="1.0">1.0</option>
+                    </select>
+                </div>
+            </div>
+            <div id="optComboCount" style="font-size:0.8rem;color:var(--text-secondary);margin:8px 0"></div>
+            <div style="display:flex;gap:8px;margin-top:6px">
+                <button class="btn btn-primary btn-sm" id="optLaunchBtn">🚀 Lancer</button>
+                <button class="btn btn-outline btn-sm" id="optCancelBtn">Annuler</button>
+            </div>
+        </div>
+
+        <!-- Optimizer Progress Panel (hidden by default) -->
         <div class="optimizer-panel" id="optimizerPanel" style="display: none;">
             <div class="optimizer-header">
                 <span class="optimizer-title">🧪 Optimisation en cours</span>

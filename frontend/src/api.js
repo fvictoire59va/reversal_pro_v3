@@ -162,10 +162,12 @@ export async function resetAgentHistory() {
 
 // ── Optimizer API ───────────────────────────────────────────
 
-export async function startOptimization(symbol = 'BTC/USDT') {
-    const params = new URLSearchParams({ symbol });
-    const res = await fetch(`${API_BASE}/optimizer/start?${params}`, {
+export async function startOptimization(symbol = 'BTC/USDT', fixedParams = {}) {
+    const body = { symbol, ...fixedParams };
+    const res = await fetch(`${API_BASE}/optimizer/start`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
     });
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));

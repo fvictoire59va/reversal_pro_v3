@@ -404,15 +404,17 @@ class OptimizerService:
             __import__("json").dumps(asdict(progress)),
         )
 
-    async def start(self, db_factory, symbol: str = "BTC/USDT"):
+    async def start(self, db_factory, symbol: str = "BTC/USDT",
+                    fixed_params: Optional[Dict] = None):
         """Launch the optimization in a background asyncio task."""
         if self._running:
             raise RuntimeError("Optimization already running")
 
-        logger.info("[OPTIMIZER] Starting optimization for %s", symbol)
+        logger.info("[OPTIMIZER] Starting optimization for %s (fixed=%s)",
+                    symbol, fixed_params)
         self._running = True
         self._task = asyncio.create_task(
-            self._safe_run(db_factory, symbol)
+            self._safe_run(db_factory, symbol, fixed_params or {})
         )
         self._task.add_done_callback(self._on_done)
 
@@ -424,10 +426,10 @@ class OptimizerService:
         else:
             logger.info("[OPTIMIZER] Task completed successfully")
 
-    async def _safe_run(self, db_factory, symbol: str):
+    async def _safe_run(self, db_factory, symbol: str, fixed_params: Dict):
         """Wrapper that guarantees all exceptions are logged."""
         try:
-            await self._run(db_factory, symbol)
+            await self._run(db_factory, symbol, fixed_params)
         except Exception as e:
             logger.error("[OPTIMIZER] Fatal error: %s", e, exc_info=True)
             try:
@@ -440,19 +442,46 @@ class OptimizerService:
                 logger.error("[OPTIMIZER] Could not save error to Redis")
             raise
 
-    async def _run(self, db_factory, symbol: str):
-        """Main optimization loop."""
-        logger.info("[OPTIMIZER] _run started for %s", symbol)
+    async def _run(self, db_factory, symbol: str, fixed_params: Dict):
+        """Main optimization loop.
+
+        ``fixed_params`` may contain keys whose values are *locked*
+        (not grid-searched).  All other parameters use their full grid.
+        """
+        logger.info("[OPTIMIZER] _run started for %s (fixed=%s)",
+                    symbol, fixed_params)
         t0 = time.perf_counter()
+
+        # Build per-parameter grids — use fixed value if provided,
+        # else the full default grid.
+        tf_grid = fixed_params.get("timeframes") or TIMEFRAMES
+        sens_grid = ([fixed_params["sensitivity"]]
+                     if "sensitivity" in fixed_params else SENSITIVITIES)
+        mode_grid = ([fixed_params["signal_mode"]]
+                     if "signal_mode" in fixed_params else SIGNAL_MODES)
+        cb_grid = ([fixed_params["confirmation_bars"]]
+                   if "confirmation_bars" in fixed_params
+                   else CONFIRMATION_BARS_GRID)
+        atr_grid = ([fixed_params["atr_length"]]
+                    if "atr_length" in fixed_params else ATR_LENGTHS)
+        avg_grid = ([fixed_params["average_length"]]
+                    if "average_length" in fixed_params else AVERAGE_LENGTHS)
+        abs_grid = ([fixed_params["absolute_reversal"]]
+                    if "absolute_reversal" in fixed_params
+                    else ABSOLUTE_REVERSALS)
+
         combos_per_tf = (
-            len(SENSITIVITIES)
-            * len(SIGNAL_MODES)
-            * len(CONFIRMATION_BARS_GRID)
-            * len(ATR_LENGTHS)
-            * len(AVERAGE_LENGTHS)
-            * len(ABSOLUTE_REVERSALS)
+            len(sens_grid) * len(mode_grid) * len(cb_grid)
+            * len(atr_grid) * len(avg_grid) * len(abs_grid)
         )
-        total_combos = len(TIMEFRAMES) * combos_per_tf
+        total_combos = len(tf_grid) * combos_per_tf
+
+        logger.info("[OPTIMIZER] Grid: %d TF × %d sens × %d mode × "
+                    "%d cb × %d atr × %d avg × %d abs = %d combos",
+                    len(tf_grid), len(sens_grid), len(mode_grid),
+                    len(cb_grid), len(atr_grid), len(avg_grid),
+                    len(abs_grid), total_combos)
+
         progress = OptimizationProgress(
             status="running",
             started_at=datetime.now(timezone.utc).isoformat(),
@@ -464,7 +493,7 @@ class OptimizerService:
         combo_idx = 0
 
         try:
-            for tf in TIMEFRAMES:
+            for tf in tf_grid:
                 progress.current_tf = tf
                 await self._save_progress(progress)
 
@@ -481,12 +510,12 @@ class OptimizerService:
 
                 best_result: Optional[BacktestResult] = None
 
-                for sensitivity in SENSITIVITIES:
-                    for signal_mode in SIGNAL_MODES:
-                        for conf_bars in CONFIRMATION_BARS_GRID:
-                            for atr_len in ATR_LENGTHS:
-                                for avg_len in AVERAGE_LENGTHS:
-                                    for abs_rev in ABSOLUTE_REVERSALS:
+                for sensitivity in sens_grid:
+                    for signal_mode in mode_grid:
+                        for conf_bars in cb_grid:
+                            for atr_len in atr_grid:
+                                for avg_len in avg_grid:
+                                    for abs_rev in abs_grid:
                                         combo_idx += 1
                                         progress.current_combo = combo_idx
                                         progress.elapsed_seconds = round(

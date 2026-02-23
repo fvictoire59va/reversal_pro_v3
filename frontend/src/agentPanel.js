@@ -481,6 +481,13 @@ function renderAgentsList(agents, openPositions = []) {
                     <span class="agent-param" title="Signal Mode">📡 ${agent.signal_mode || 'Confirmed Only'}</span>
                     <span class="agent-param" title="Analysis Bars">📊 ${agent.analysis_limit || 500}</span>
                 </div>
+                <div class="agent-card-params engine-params">
+                    <span class="agent-param" title="Confirmation Bars">CB:${agent.confirmation_bars ?? 0}</span>
+                    <span class="agent-param" title="Method">${(agent.method || 'average') === 'average' ? 'AVG' : 'ABS'}</span>
+                    <span class="agent-param" title="ATR Length">ATR:${agent.atr_length ?? 5}</span>
+                    <span class="agent-param" title="Average Length">Avg:${agent.average_length ?? 5}</span>
+                    <span class="agent-param" title="Absolute Reversal">Rev:${agent.absolute_reversal ?? 0.5}</span>
+                </div>
                 <div class="agent-card-pnl">
                     <span class="agent-pnl ${pnlClass}">PnL: ${pnlSign}${pnl.toFixed(2)}</span>
                     ${uPnlHtml}

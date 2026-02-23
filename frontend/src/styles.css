@@ -1102,6 +1102,12 @@ body {
     padding-top: 3px;
 }
 
+.agent-card-params.engine-params {
+    border-top: none;
+    padding-top: 0;
+    opacity: 0.6;
+}
+
 .agent-param {
     font-size: 9px;
     font-family: var(--font-mono);

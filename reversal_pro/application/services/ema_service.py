@@ -119,7 +119,7 @@ class EMAService:
 
             state.prev_buy = buy
             state.prev_sell = sell
-            state.prev_buy_signal = prev_buy_signal
-            state.prev_sell_signal = prev_sell_signal
+            state.prev_buy_signal = state.buy_signal
+            state.prev_sell_signal = state.sell_signal
 
         return trends, state

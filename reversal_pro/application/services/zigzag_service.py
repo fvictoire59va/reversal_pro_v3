@@ -86,7 +86,7 @@ class ZigZagService:
             if np.isnan(ph) or np.isnan(pl):
                 continue
 
-            rev = reversal_amounts[i]
+            rev = reversal_amounts[ci]
             if np.isnan(rev):
                 continue
 

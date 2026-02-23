@@ -9,13 +9,24 @@ import { esc } from './escapeHtml.js';
 /**
  * Shift a UTC Unix timestamp (seconds) so lightweight-charts displays it as Paris time.
  * lightweight-charts always renders timestamps as UTC, so we add the Paris offset.
+ * The offset is cached per hour to avoid expensive toLocaleString calls on every bar.
  */
+const _offsetCache = new Map();          // hourKey → offset in seconds
+
 function utcToParisTimestamp(utcTimestamp) {
-    const date = new Date(utcTimestamp * 1000);
-    const parisStr = date.toLocaleString('en-US', { timeZone: 'Europe/Paris' });
-    const utcStr = date.toLocaleString('en-US', { timeZone: 'UTC' });
-    const offsetMs = new Date(parisStr) - new Date(utcStr);
-    return utcTimestamp + Math.round(offsetMs / 1000);
+    // Cache key: round to the nearest hour (offset changes at most 2×/year)
+    const hourKey = Math.floor(utcTimestamp / 3600);
+    let offset = _offsetCache.get(hourKey);
+    if (offset === undefined) {
+        const date = new Date(utcTimestamp * 1000);
+        const parisStr = date.toLocaleString('en-US', { timeZone: 'Europe/Paris' });
+        const utcStr = date.toLocaleString('en-US', { timeZone: 'UTC' });
+        offset = Math.round((new Date(parisStr) - new Date(utcStr)) / 1000);
+        _offsetCache.set(hourKey, offset);
+        // Keep cache bounded (clear if too large)
+        if (_offsetCache.size > 5000) _offsetCache.clear();
+    }
+    return utcTimestamp + offset;
 }
 
 export class ChartManager {

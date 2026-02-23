@@ -135,12 +135,11 @@ def _run_backtest(
     trade_amount: float = 100.0,
 ) -> BacktestResult:
     """
-    Run the reversal detection engine and simulate trades.
-
-    For each signal detected:
-    - Open a position (LONG or SHORT) at the signal's actual_price
-    - SL from the opposite pivot; TP from R:R ratio
-    - Walk forward through subsequent bars checking SL/TP hits
+    Run the reversal detection engine and simulate trades **realistically**:
+    - Only one position open at a time (like the real agent).
+    - Breakeven: SL moves to entry after price reaches 1× risk.
+    - Partial TP at TP1 (50%), then target TP2.
+    - Trailing stop after breakeven (tracks best price − 1× risk).
     """
     n = len(bars)
     if n < 50:
@@ -193,78 +192,158 @@ def _run_backtest(
 
     rr_ratio, atr_mult, max_sl_pct, fallback_sl_pct = _get_tf_params(timeframe)
 
+    # Build signal map: bar_index → signal (keep last signal per bar)
+    signal_map: Dict[int, object] = {}
+    for sig in signals:
+        signal_map[sig.bar_index] = sig
+
     trades: List[BacktestTrade] = []
 
-    for sig in signals:
-        idx = sig.bar_index
-        if idx >= n - 2:
-            continue  # Need at least a couple bars after signal
+    # ── State machine: one position at a time ─────────────────
+    in_position = False
+    pos_side = None
+    pos_entry = 0.0
+    pos_sl = 0.0
+    pos_tp1 = 0.0
+    pos_tp2 = 0.0
+    pos_risk = 0.0
+    pos_best = 0.0
+    pos_partial_closed = False
+    pos_entry_bar = 0
+    pos_breakeven = False
 
-        entry_price = sig.actual_price
-        side = "LONG" if sig.is_bullish else "SHORT"
-        atr = atr_values[idx] if idx < len(atr_values) and not np.isnan(atr_values[idx]) else None
+    for i in range(n):
+        candle_high = bars[i].high
+        candle_low = bars[i].low
+        candle_close = bars[i].close
 
-        # SL from opposite pivot
-        pivot_price = None
-        for prev_sig in reversed(signals):
-            if prev_sig.bar_index < idx and prev_sig.is_bullish != sig.is_bullish:
-                pivot_price = prev_sig.actual_price
-                break
-
-        # Calculate SL/TP
-        sl, tp, _ = _calculate_sl_tp(
-            side, entry_price, pivot_price, atr, timeframe,
-            rr_ratio, atr_mult, max_sl_pct, fallback_sl_pct,
-        )
-
-        # Walk forward
-        exit_price = entry_price
-        is_winner = False
-        bars_held = 0
-
-        for j in range(idx + 1, n):
-            bars_held += 1
-            candle_high = bars[j].high
-            candle_low = bars[j].low
-
-            if side == "LONG":
-                if candle_low <= sl:
-                    exit_price = sl
-                    break
-                if candle_high >= tp:
-                    exit_price = tp
-                    is_winner = True
-                    break
+        if in_position:
+            # Track best price for trailing stop
+            if pos_side == "LONG":
+                pos_best = max(pos_best, candle_high)
             else:
-                if candle_high >= sl:
-                    exit_price = sl
-                    break
-                if candle_low <= tp:
-                    exit_price = tp
-                    is_winner = True
-                    break
-        else:
-            # End of data without SL/TP hit — close at last bar close
-            exit_price = bars[-1].close
-            if side == "LONG":
-                is_winner = exit_price > entry_price
-            else:
-                is_winner = exit_price < entry_price
+                pos_best = min(pos_best, candle_low)
 
-        if side == "LONG":
-            pnl_pct = ((exit_price - entry_price) / entry_price) * 100
-        else:
-            pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+            # ── Breakeven check (1× risk reached) ──
+            if not pos_breakeven and pos_risk > 0:
+                if pos_side == "LONG" and candle_high >= pos_entry + pos_risk:
+                    pos_sl = pos_entry  # Move SL to breakeven
+                    pos_breakeven = True
+                elif pos_side == "SHORT" and candle_low <= pos_entry - pos_risk:
+                    pos_sl = pos_entry
+                    pos_breakeven = True
 
+            # ── Trailing stop (after breakeven) ──
+            if pos_breakeven and pos_risk > 0:
+                if pos_side == "LONG":
+                    trail_sl = pos_best - pos_risk
+                    if trail_sl > pos_sl:
+                        pos_sl = trail_sl
+                elif pos_side == "SHORT":
+                    trail_sl = pos_best + pos_risk
+                    if trail_sl < pos_sl:
+                        pos_sl = trail_sl
+
+            # ── Stop-loss hit ──
+            hit_sl = False
+            if pos_side == "LONG" and candle_low <= pos_sl:
+                hit_sl = True
+                exit_price = pos_sl
+            elif pos_side == "SHORT" and candle_high >= pos_sl:
+                hit_sl = True
+                exit_price = pos_sl
+
+            if hit_sl:
+                if pos_side == "LONG":
+                    pnl_pct = ((exit_price - pos_entry) / pos_entry) * 100
+                else:
+                    pnl_pct = ((pos_entry - exit_price) / pos_entry) * 100
+                trades.append(BacktestTrade(
+                    side=pos_side, entry_price=pos_entry,
+                    sl=pos_sl, tp=pos_tp1 if not pos_partial_closed else pos_tp2,
+                    exit_price=exit_price, pnl_pct=pnl_pct,
+                    is_winner=(pnl_pct > 0), bars_held=i - pos_entry_bar,
+                ))
+                in_position = False
+                continue
+
+            # ── Take-profit check ──
+            current_tp = pos_tp2 if pos_partial_closed else pos_tp1
+            hit_tp = False
+            if pos_side == "LONG" and candle_high >= current_tp:
+                hit_tp = True
+            elif pos_side == "SHORT" and candle_low <= current_tp:
+                hit_tp = True
+
+            if hit_tp:
+                if not pos_partial_closed and pos_tp2 != pos_tp1:
+                    # Stage 1: partial TP — move SL to breakeven, target TP2
+                    pos_partial_closed = True
+                    pos_sl = pos_entry
+                    pos_breakeven = True
+                    # Don't close — continue with remaining 50%
+                else:
+                    # Stage 2: full close at TP (or TP1 if no partial)
+                    exit_price = current_tp
+                    if pos_side == "LONG":
+                        pnl_pct = ((exit_price - pos_entry) / pos_entry) * 100
+                    else:
+                        pnl_pct = ((pos_entry - exit_price) / pos_entry) * 100
+                    trades.append(BacktestTrade(
+                        side=pos_side, entry_price=pos_entry,
+                        sl=pos_sl, tp=current_tp,
+                        exit_price=exit_price, pnl_pct=pnl_pct,
+                        is_winner=True, bars_held=i - pos_entry_bar,
+                    ))
+                    in_position = False
+                    continue
+
+        # ── Open new position from signal (only if flat) ──
+        if not in_position and i in signal_map:
+            sig = signal_map[i]
+            if i >= n - 2:
+                continue
+
+            entry_price = sig.actual_price
+            side = "LONG" if sig.is_bullish else "SHORT"
+            atr = atr_values[i] if i < len(atr_values) and not np.isnan(atr_values[i]) else None
+
+            # SL from opposite pivot
+            pivot_price = None
+            for prev_sig in reversed(signals):
+                if prev_sig.bar_index < i and prev_sig.is_bullish != sig.is_bullish:
+                    pivot_price = prev_sig.actual_price
+                    break
+
+            sl, tp, tp2 = _calculate_sl_tp(
+                side, entry_price, pivot_price, atr, timeframe,
+                rr_ratio, atr_mult, max_sl_pct, fallback_sl_pct,
+            )
+
+            pos_side = side
+            pos_entry = entry_price
+            pos_sl = sl
+            pos_tp1 = tp
+            pos_tp2 = tp2
+            pos_risk = abs(entry_price - sl)
+            pos_best = entry_price
+            pos_partial_closed = False
+            pos_entry_bar = i
+            pos_breakeven = False
+            in_position = True
+
+    # Close any remaining open position at last bar close
+    if in_position:
+        exit_price = bars[-1].close
+        if pos_side == "LONG":
+            pnl_pct = ((exit_price - pos_entry) / pos_entry) * 100
+        else:
+            pnl_pct = ((pos_entry - exit_price) / pos_entry) * 100
         trades.append(BacktestTrade(
-            side=side,
-            entry_price=entry_price,
-            sl=sl,
-            tp=tp,
-            exit_price=exit_price,
-            pnl_pct=pnl_pct,
-            is_winner=is_winner,
-            bars_held=bars_held,
+            side=pos_side, entry_price=pos_entry,
+            sl=pos_sl, tp=pos_tp1,
+            exit_price=exit_price, pnl_pct=pnl_pct,
+            is_winner=(pnl_pct > 0), bars_held=n - 1 - pos_entry_bar,
         ))
 
     if not trades:
@@ -303,11 +382,16 @@ def _run_backtest(
         if dd > max_dd:
             max_dd = dd
 
-    # Scoring: balanced metric
-    # Formula: score = win_rate * profit_factor * sqrt(num_trades) * (1 - dd_penalty)
-    trade_count_bonus = min(len(trades) ** 0.5, 10.0)  # cap at ~100 trades
-    dd_penalty = min(max_dd / 20.0, 0.8)  # cap drawdown penalty at 80%
-    score = win_rate * max(profit_factor, 0.01) * trade_count_bonus * (1 - dd_penalty)
+    # ── Scoring: normalized balanced metric ──
+    # Normalize win_rate to 0–1 range; add avg_pnl as weight
+    wr_norm = win_rate / 100.0
+    trade_count_bonus = min(len(trades) ** 0.5, 10.0)
+    dd_penalty = min(max_dd / 15.0, 0.9)
+    avg_pnl_bonus = max(1 + avg_pnl / 10.0, 0.1)  # Rewards positive avg PnL
+    score = (
+        wr_norm * max(profit_factor, 0.01) * trade_count_bonus
+        * (1 - dd_penalty) * avg_pnl_bonus
+    )
 
     # Penalize very few trades
     if len(trades) < 3:
@@ -331,7 +415,7 @@ def _run_backtest(
         avg_pnl_pct=round(avg_pnl, 3),
         profit_factor=round(profit_factor, 2),
         max_drawdown_pct=round(max_dd, 2),
-        score=round(score, 1),
+        score=round(score, 2),
     )
 
 

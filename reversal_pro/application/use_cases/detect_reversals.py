@@ -147,17 +147,14 @@ class DetectReversalsUseCase:
             highs, lows, closes, self.atr_length
         )
 
-        # ── Step 2: Reversal thresholds ──────────────────────────────
-        reversal_amounts = np.array([
-            ATRService.compute_reversal_threshold(
-                close=closes[i],
-                percent_threshold=self.sensitivity_config.percent_threshold,
-                absolute_reversal=self.absolute_reversal,
-                atr_multiplier=self.sensitivity_config.atr_multiplier,
-                atr_value=atr_values[i] if not np.isnan(atr_values[i]) else 0.0,
-            )
-            for i in range(n)
-        ])
+        # ── Step 2: Reversal thresholds (vectorized) ────────────
+        pct_amounts = closes * self.sensitivity_config.percent_threshold / 100.0
+        atr_safe = np.nan_to_num(atr_values, nan=0.0)
+        atr_amounts = self.sensitivity_config.atr_multiplier * atr_safe
+        reversal_amounts = np.maximum(
+            pct_amounts,
+            np.maximum(self.absolute_reversal, atr_amounts),
+        )
 
         # ── Step 2b: Matrix Profile regime-change detection ──────────
         # When enabled, this dynamically reduces reversal thresholds

@@ -353,14 +353,19 @@ class AnalysisService:
 
     # ── Persistence helpers ──────────────────────────────────────
     async def _persist_indicators(self, db, bars_data, result, request):
-        """Store computed indicators."""
+        """Store computed indicators (only last N bars to avoid redundant writes)."""
         if not result.trend_history:
             return
 
+        # Only upsert the last 50 bars — older bars are already persisted.
+        tail = min(50, len(result.trend_history), len(bars_data))
+        start = len(result.trend_history) - tail
+
         values = []
-        for i, trend in enumerate(result.trend_history):
+        for i in range(start, len(result.trend_history)):
             if i >= len(bars_data):
                 break
+            trend = result.trend_history[i]
             values.append({
                 "time": datetime.fromisoformat(bars_data[i]["time"]),
                 "symbol": request.symbol,

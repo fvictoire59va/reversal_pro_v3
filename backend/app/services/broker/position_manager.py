@@ -220,6 +220,24 @@ class PositionManagerMixin:
             api_secret=settings.hyperliquid_api_secret,
         )
 
+        if not order_result.success:
+            mode = agent.mode if agent else "paper"
+            if mode == "live":
+                logger.error(
+                    f"[agent_{pos.agent_id}] CLOSE ORDER FAILED in live mode: "
+                    f"{order_result.error} — position {pos.id} stays OPEN"
+                )
+                await self._log(db, pos.agent_id, "ORDER_FAILED", {
+                    "action": "close", "position_id": pos.id,
+                    "side": pos.side, "error": order_result.error,
+                })
+                return pos  # Do NOT mark closed if real exchange order failed
+            # Paper mode: proceed with estimated price
+            logger.warning(
+                f"[agent_{pos.agent_id}] Close order failed in paper mode, "
+                f"using estimated exit price {exit_price}"
+            )
+
         actual_exit = order_result.filled_price if order_result.success else exit_price
 
         if pos.side == "LONG":
@@ -300,12 +318,23 @@ class PositionManagerMixin:
             partial_pnl_eur = await hyperliquid_client.convert_usdt_to_eur(partial_pnl_usdt)
 
             settings = get_settings()
-            await hyperliquid_client.market_close(
+            partial_order = await hyperliquid_client.market_close(
                 symbol=pos.symbol, side=pos.side, quantity=partial_qty,
                 current_price=pos.take_profit, mode=agent.mode,
                 wallet_address=settings.hyperliquid_wallet_address,
                 api_secret=settings.hyperliquid_api_secret,
             )
+
+            if not partial_order.success and agent.mode == "live":
+                logger.error(
+                    f"[{agent.name}] PARTIAL TP close FAILED in live mode: "
+                    f"{partial_order.error} — skipping partial TP"
+                )
+                await self._log(db, agent.id, "ORDER_FAILED", {
+                    "action": "partial_tp", "position_id": pos.id,
+                    "side": pos.side, "error": partial_order.error,
+                })
+                return False
 
             pos.quantity = pos.quantity - partial_qty
             pos.partial_closed = True

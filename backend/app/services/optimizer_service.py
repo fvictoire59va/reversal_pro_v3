@@ -163,7 +163,7 @@ def _run_backtest(
             absolute_reversal=absolute_reversal,
             generate_zones=False,
             timeframe=timeframe,
-            use_matrix_profile=True,
+            use_matrix_profile=False,
         )
         result = use_case.execute(bars)
     except Exception as e:
@@ -538,13 +538,13 @@ class OptimizerService:
                                         if best_result is None or result.score > best_result.score:
                                             best_result = result
 
-                                        # Save progress periodically
-                                        if combo_idx % 20 == 0:
+                                        # Save progress every combo (Redis setex is cheap)
+                                        await self._save_progress(progress)
+                                        if combo_idx % 50 == 0:
                                             logger.info(
                                                 f"[OPTIMIZER] {tf} combo {combo_idx}/{total_combos}: "
                                                 f"best score={best_result.score if best_result else 0}"
                                             )
-                                            await self._save_progress(progress)
 
                 if best_result and best_result.total_trades > 0:
                     best_per_tf[tf] = best_result

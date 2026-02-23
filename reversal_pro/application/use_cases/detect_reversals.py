@@ -49,7 +49,7 @@ class DetectReversalsUseCase:
         atr_length: int = 5,
         average_length: int = 5,
         confirmation_bars: int = 0,
-        absolute_reversal: float = 0.05,
+        absolute_reversal: float = 0.5,
         # Zone params
         zone_thickness_pct: float = 0.02,
         zone_extension_bars: int = 20,
@@ -240,14 +240,20 @@ class DetectReversalsUseCase:
             confirmed_pivots, n, ph_conf, pl_conf
         )
 
-        # Preview signals (using non-delayed prices)
-        preview_signals = []
+        # Preview signals — convert preview pivots directly into signals.
+        # Unlike confirmed signals which require U1/D1 price confirmation,
+        # preview signals mirror the Pine Script behaviour: each pivot IS
+        # the signal (pivot high → bearish preview, pivot low → bullish).
+        preview_signals: List[ReversalSignal] = []
         if self.signal_mode != SignalMode.CONFIRMED_ONLY and preview_pivots:
-            preview_signals = self.reversal_detector.detect(
-                preview_pivots, n, price_h, price_l
-            )
-            for s in preview_signals:
-                s.is_preview = True
+            for p in preview_pivots:
+                preview_signals.append(ReversalSignal(
+                    bar_index=p.bar_index,
+                    price=p.price,
+                    actual_price=p.actual_price,
+                    is_bullish=not p.is_high,  # high pivot → bearish, low → bullish
+                    is_preview=True,
+                ))
 
         all_signals = confirmed_signals + preview_signals
 

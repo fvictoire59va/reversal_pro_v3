@@ -35,7 +35,7 @@ class AdvancedSettings:
     """Advanced calculation settings."""
     calculation_method: CalculationMethod = CalculationMethod.AVERAGE
     percent_reversal: float = 0.01
-    absolute_reversal: float = 0.05
+    absolute_reversal: float = 0.5
     atr_length: int = 5
     average_length: int = 5
 

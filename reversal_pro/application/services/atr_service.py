@@ -68,9 +68,9 @@ class ATRService:
         Compute the final reversal threshold.
         reversalAmount = max(close * pct, max(absRev, atrMult * atr))
 
-        Note: percent_threshold is already a fraction (e.g. 0.01 = 1%),
-        so we do NOT divide by 100 again.
+        Note: percent_threshold is in percentage points (e.g. 0.01 = 0.01%)
+        matching Pine Script: close * pct / 100.
         """
-        pct_amount = close * percent_threshold
+        pct_amount = close * percent_threshold / 100
         atr_amount = atr_multiplier * atr_value
         return max(pct_amount, max(absolute_reversal, atr_amount))

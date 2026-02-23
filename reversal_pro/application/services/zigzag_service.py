@@ -217,4 +217,27 @@ class ZigZagService:
                     zhigh_actual = highs[i]
                     zhigh_bar = i
 
+        # Append the *last potential pivot* — the extreme currently being
+        # tracked that has not yet reversed.  This is the key difference
+        # with confirmed pivots: preview shows the forming top/bottom
+        # before the reversal threshold is hit.
+        if direction == 1 and zhigh is not None:
+            # Tracking an upward move → potential top
+            previews.append(Pivot(
+                price=zhigh,
+                actual_price=zhigh_actual,
+                bar_index=zhigh_bar,
+                is_high=True,
+                is_preview=True,
+            ))
+        elif direction == -1 and zlow is not None:
+            # Tracking a downward move → potential bottom
+            previews.append(Pivot(
+                price=zlow,
+                actual_price=zlow_actual,
+                bar_index=zlow_bar,
+                is_high=False,
+                is_preview=True,
+            ))
+
         return previews

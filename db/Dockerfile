@@ -10,6 +10,7 @@ COPY db/migrate_add_signal_tracking.sql /scripts/06_migrate_add_signal_tracking.
 COPY db/migrate_add_unrealized_pnl.sql /scripts/07_migrate_add_unrealized_pnl.sql
 COPY db/migrate_add_partial_tp_breakeven.sql /scripts/08_migrate_add_partial_tp_breakeven.sql
 COPY db/migrate_add_trailing_stop.sql /scripts/09_migrate_add_trailing_stop.sql
+COPY db/migrate_add_engine_params.sql /scripts/10_migrate_add_engine_params.sql
 
 COPY db/run-migrations.sh /scripts/run-migrations.sh
 RUN chmod +x /scripts/run-migrations.sh

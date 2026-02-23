@@ -74,6 +74,10 @@ class AgentOrchestratorMixin:
                     limit=agent.analysis_limit,
                     sensitivity=agent.sensitivity,
                     signal_mode=agent.signal_mode,
+                    confirmation_bars=getattr(agent, 'confirmation_bars', 0),
+                    method=getattr(agent, 'method', 'average'),
+                    atr_length=getattr(agent, 'atr_length', 5),
+                    average_length=getattr(agent, 'average_length', 5),
                 )
                 from ..analysis_service import analysis_service
                 await analysis_service.run_analysis(db, request)
@@ -99,6 +103,10 @@ class AgentOrchestratorMixin:
                             symbol=agent.symbol, timeframe=htf,
                             limit=500, sensitivity=agent.sensitivity,
                             signal_mode=agent.signal_mode,
+                            confirmation_bars=getattr(agent, 'confirmation_bars', 0),
+                            method=getattr(agent, 'method', 'average'),
+                            atr_length=getattr(agent, 'atr_length', 5),
+                            average_length=getattr(agent, 'average_length', 5),
                         )
                         await analysis_service.run_analysis(db, htf_request)
                         logger.debug(f"[{agent.name}] HTF {htf} data fetched & analysis refreshed")

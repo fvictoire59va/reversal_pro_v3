@@ -38,6 +38,11 @@ def _build_agent_response(agent, stats: dict) -> AgentResponse:
         sensitivity=agent.sensitivity,
         signal_mode=agent.signal_mode,
         analysis_limit=agent.analysis_limit,
+        confirmation_bars=getattr(agent, 'confirmation_bars', 0),
+        method=getattr(agent, 'method', 'average'),
+        atr_length=getattr(agent, 'atr_length', 5),
+        average_length=getattr(agent, 'average_length', 5),
+        absolute_reversal=getattr(agent, 'absolute_reversal', 0.5),
         created_at=agent.created_at,
         updated_at=agent.updated_at,
         open_positions=stats["open_positions"],
@@ -188,6 +193,8 @@ async def create_agent(req: AgentCreate, db: AsyncSession = Depends(get_db)):
         agent = await agent_broker_service.create_agent(
             db, req.symbol, req.timeframe, req.trade_amount, req.mode,
             req.sensitivity, req.signal_mode, req.analysis_limit,
+            req.confirmation_bars, req.method, req.atr_length,
+            req.average_length, req.absolute_reversal,
         )
         stats = await agent_broker_service.get_agent_stats(db, agent.id)
         return _build_agent_response(agent, stats)
@@ -232,6 +239,16 @@ async def update_agent(agent_id: int, req: AgentUpdate, db: AsyncSession = Depen
         agent.signal_mode = req.signal_mode
     if req.analysis_limit is not None:
         agent.analysis_limit = req.analysis_limit
+    if req.confirmation_bars is not None:
+        agent.confirmation_bars = req.confirmation_bars
+    if req.method is not None:
+        agent.method = req.method
+    if req.atr_length is not None:
+        agent.atr_length = req.atr_length
+    if req.average_length is not None:
+        agent.average_length = req.average_length
+    if req.absolute_reversal is not None:
+        agent.absolute_reversal = req.absolute_reversal
 
     await db.commit()
     await db.refresh(agent)

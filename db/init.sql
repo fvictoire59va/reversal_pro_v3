@@ -140,6 +140,11 @@ CREATE TABLE IF NOT EXISTS agents (
     sensitivity     VARCHAR(20) NOT NULL DEFAULT 'Medium',
     signal_mode     VARCHAR(30) NOT NULL DEFAULT 'Confirmed Only',
     analysis_limit  INTEGER NOT NULL DEFAULT 500,
+    confirmation_bars INTEGER NOT NULL DEFAULT 0,
+    method          VARCHAR(20) NOT NULL DEFAULT 'average',
+    atr_length      INTEGER NOT NULL DEFAULT 5,
+    average_length  INTEGER NOT NULL DEFAULT 5,
+    absolute_reversal DOUBLE PRECISION NOT NULL DEFAULT 0.5,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

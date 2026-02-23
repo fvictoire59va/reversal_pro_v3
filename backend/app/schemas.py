@@ -64,6 +64,7 @@ class AnalysisRequest(BaseModel):
     method: str = "average"
     atr_length: int = Field(default=5, ge=1, le=50)
     average_length: int = Field(default=5, ge=1, le=50)
+    absolute_reversal: float = Field(default=0.5, ge=0.0, le=10.0)
     show_zones: bool = True
 
 
@@ -151,6 +152,11 @@ class AgentCreate(BaseModel):
     sensitivity: str = "Medium"
     signal_mode: str = "Confirmed Only"
     analysis_limit: int = Field(default=500, ge=50, le=5000)
+    confirmation_bars: int = Field(default=0, ge=0, le=5)
+    method: str = "average"
+    atr_length: int = Field(default=5, ge=1, le=50)
+    average_length: int = Field(default=5, ge=1, le=50)
+    absolute_reversal: float = Field(default=0.5, ge=0.0, le=10.0)
 
 
 class AgentUpdate(BaseModel):
@@ -159,6 +165,11 @@ class AgentUpdate(BaseModel):
     sensitivity: Optional[str] = None
     signal_mode: Optional[str] = None
     analysis_limit: Optional[int] = None
+    confirmation_bars: Optional[int] = None
+    method: Optional[str] = None
+    atr_length: Optional[int] = None
+    average_length: Optional[int] = None
+    absolute_reversal: Optional[float] = None
 
 
 class AgentResponse(BaseModel):
@@ -173,6 +184,11 @@ class AgentResponse(BaseModel):
     sensitivity: str = "Medium"
     signal_mode: str = "Confirmed Only"
     analysis_limit: int = 500
+    confirmation_bars: int = 0
+    method: str = "average"
+    atr_length: int = 5
+    average_length: int = 5
+    absolute_reversal: float = 0.5
     created_at: datetime
     updated_at: datetime
     open_positions: int = 0

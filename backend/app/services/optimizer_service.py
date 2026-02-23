@@ -8,6 +8,7 @@ combo per TF is used to create an inactive agent.
 """
 
 import asyncio
+import functools
 import logging
 import time
 from dataclasses import dataclass, field, asdict
@@ -31,6 +32,13 @@ logger = logging.getLogger(__name__)
 SENSITIVITIES = ["Very High", "High", "Medium", "Low", "Very Low"]
 SIGNAL_MODES = ["Confirmed Only", "Confirmed + Preview"]
 TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
+
+# Engine-parameter grid — values close to Pine Script defaults
+CONFIRMATION_BARS_GRID = [0, 1, 2]
+ATR_LENGTHS = [3, 5, 7]
+AVERAGE_LENGTHS = [3, 5, 7]
+ABSOLUTE_REVERSALS = [0.3, 0.5, 0.8]
+# method stays fixed at "average" (not worth grid-searching)
 
 # SL/TP params per TF (mirrors risk_manager.TF_PARAMS)
 _TF_PARAMS = {
@@ -81,6 +89,11 @@ class BacktestResult:
     sensitivity: str
     signal_mode: str
     timeframe: str
+    confirmation_bars: int = 0
+    method: str = "average"
+    atr_length: int = 5
+    average_length: int = 5
+    absolute_reversal: float = 0.5
     total_trades: int = 0
     winners: int = 0
     losers: int = 0
@@ -115,6 +128,10 @@ def _run_backtest(
     timeframe: str,
     sensitivity: str,
     signal_mode: str,
+    confirmation_bars: int = 0,
+    atr_length: int = 5,
+    average_length: int = 5,
+    absolute_reversal: float = 0.5,
     trade_amount: float = 100.0,
 ) -> BacktestResult:
     """
@@ -129,7 +146,9 @@ def _run_backtest(
     if n < 50:
         return BacktestResult(
             sensitivity=sensitivity, signal_mode=signal_mode,
-            timeframe=timeframe,
+            timeframe=timeframe, confirmation_bars=confirmation_bars,
+            atr_length=atr_length, average_length=average_length,
+            absolute_reversal=absolute_reversal,
         )
 
     # Run analysis engine
@@ -138,9 +157,10 @@ def _run_backtest(
             signal_mode=SignalMode(signal_mode),
             sensitivity=SensitivityPreset(sensitivity),
             calculation_method=CalculationMethod.AVERAGE,
-            atr_length=5,
-            average_length=5,
-            confirmation_bars=0,
+            atr_length=atr_length,
+            average_length=average_length,
+            confirmation_bars=confirmation_bars,
+            absolute_reversal=absolute_reversal,
             generate_zones=False,
             timeframe=timeframe,
             use_matrix_profile=True,
@@ -150,14 +170,18 @@ def _run_backtest(
         logger.warning(f"Backtest engine error ({sensitivity}/{signal_mode}/{timeframe}): {e}")
         return BacktestResult(
             sensitivity=sensitivity, signal_mode=signal_mode,
-            timeframe=timeframe,
+            timeframe=timeframe, confirmation_bars=confirmation_bars,
+            atr_length=atr_length, average_length=average_length,
+            absolute_reversal=absolute_reversal,
         )
 
     signals = result.signals
     if not signals:
         return BacktestResult(
             sensitivity=sensitivity, signal_mode=signal_mode,
-            timeframe=timeframe,
+            timeframe=timeframe, confirmation_bars=confirmation_bars,
+            atr_length=atr_length, average_length=average_length,
+            absolute_reversal=absolute_reversal,
         )
 
     # ATR values for SL calculation
@@ -165,7 +189,7 @@ def _run_backtest(
     lows = np.array([b.low for b in bars], dtype=float)
     closes = np.array([b.close for b in bars], dtype=float)
     from reversal_pro.application.services.atr_service import ATRService
-    atr_values = ATRService().atr(highs, lows, closes, 5)
+    atr_values = ATRService().atr(highs, lows, closes, atr_length)
 
     rr_ratio, atr_mult, max_sl_pct, fallback_sl_pct = _get_tf_params(timeframe)
 
@@ -246,7 +270,9 @@ def _run_backtest(
     if not trades:
         return BacktestResult(
             sensitivity=sensitivity, signal_mode=signal_mode,
-            timeframe=timeframe,
+            timeframe=timeframe, confirmation_bars=confirmation_bars,
+            atr_length=atr_length, average_length=average_length,
+            absolute_reversal=absolute_reversal,
         )
 
     # Compute statistics
@@ -293,6 +319,10 @@ def _run_backtest(
         sensitivity=sensitivity,
         signal_mode=signal_mode,
         timeframe=timeframe,
+        confirmation_bars=confirmation_bars,
+        atr_length=atr_length,
+        average_length=average_length,
+        absolute_reversal=absolute_reversal,
         total_trades=len(trades),
         winners=winners,
         losers=losers,
@@ -414,7 +444,15 @@ class OptimizerService:
         """Main optimization loop."""
         logger.info("[OPTIMIZER] _run started for %s", symbol)
         t0 = time.perf_counter()
-        total_combos = len(TIMEFRAMES) * len(SENSITIVITIES) * len(SIGNAL_MODES)
+        combos_per_tf = (
+            len(SENSITIVITIES)
+            * len(SIGNAL_MODES)
+            * len(CONFIRMATION_BARS_GRID)
+            * len(ATR_LENGTHS)
+            * len(AVERAGE_LENGTHS)
+            * len(ABSOLUTE_REVERSALS)
+        )
+        total_combos = len(TIMEFRAMES) * combos_per_tf
         progress = OptimizationProgress(
             status="running",
             started_at=datetime.now(timezone.utc).isoformat(),
@@ -436,7 +474,7 @@ class OptimizerService:
 
                 if len(bars) < 50:
                     logger.info(f"[OPTIMIZER] Skipping {tf}: only {len(bars)} bars")
-                    combo_idx += len(SENSITIVITIES) * len(SIGNAL_MODES)
+                    combo_idx += combos_per_tf
                     progress.current_combo = combo_idx
                     await self._save_progress(progress)
                     continue
@@ -445,31 +483,39 @@ class OptimizerService:
 
                 for sensitivity in SENSITIVITIES:
                     for signal_mode in SIGNAL_MODES:
-                        combo_idx += 1
-                        progress.current_combo = combo_idx
-                        progress.elapsed_seconds = round(time.perf_counter() - t0, 1)
+                        for conf_bars in CONFIRMATION_BARS_GRID:
+                            for atr_len in ATR_LENGTHS:
+                                for avg_len in AVERAGE_LENGTHS:
+                                    for abs_rev in ABSOLUTE_REVERSALS:
+                                        combo_idx += 1
+                                        progress.current_combo = combo_idx
+                                        progress.elapsed_seconds = round(
+                                            time.perf_counter() - t0, 1
+                                        )
 
-                        # Run CPU-bound backtest in executor to not block event loop
-                        loop = asyncio.get_running_loop()
-                        result = await loop.run_in_executor(
-                            None,
-                            _run_backtest,
-                            bars, tf, sensitivity, signal_mode,
-                        )
+                                        loop = asyncio.get_running_loop()
+                                        result = await loop.run_in_executor(
+                                            None,
+                                            functools.partial(
+                                                _run_backtest,
+                                                bars, tf, sensitivity, signal_mode,
+                                                confirmation_bars=conf_bars,
+                                                atr_length=atr_len,
+                                                average_length=avg_len,
+                                                absolute_reversal=abs_rev,
+                                            ),
+                                        )
 
-                        logger.info(
-                            f"[OPTIMIZER] {tf} {sensitivity}/{signal_mode}: "
-                            f"{result.total_trades} trades, "
-                            f"WR={result.win_rate}%, PF={result.profit_factor}, "
-                            f"score={result.score}"
-                        )
+                                        if best_result is None or result.score > best_result.score:
+                                            best_result = result
 
-                        if best_result is None or result.score > best_result.score:
-                            best_result = result
-
-                        # Save progress periodically
-                        if combo_idx % 3 == 0:
-                            await self._save_progress(progress)
+                                        # Save progress periodically
+                                        if combo_idx % 20 == 0:
+                                            logger.info(
+                                                f"[OPTIMIZER] {tf} combo {combo_idx}/{total_combos}: "
+                                                f"best score={best_result.score if best_result else 0}"
+                                            )
+                                            await self._save_progress(progress)
 
                 if best_result and best_result.total_trades > 0:
                     best_per_tf[tf] = best_result
@@ -547,12 +593,20 @@ class OptimizerService:
                     "UPDATE agents SET "
                     "  sensitivity = :sensitivity, "
                     "  signal_mode = :signal_mode, "
+                    "  confirmation_bars = :confirmation_bars, "
+                    "  atr_length = :atr_length, "
+                    "  average_length = :average_length, "
+                    "  absolute_reversal = :absolute_reversal, "
                     "  is_active = FALSE, "
                     "  updated_at = NOW() "
                     "WHERE id = :id"
                 ), {
                     "sensitivity": result.sensitivity,
                     "signal_mode": result.signal_mode,
+                    "confirmation_bars": result.confirmation_bars,
+                    "atr_length": result.atr_length,
+                    "average_length": result.average_length,
+                    "absolute_reversal": result.absolute_reversal,
                     "id": existing_row[0],
                 })
                 created.append({
@@ -562,6 +616,10 @@ class OptimizerService:
                     "timeframe": tf,
                     "sensitivity": result.sensitivity,
                     "signal_mode": result.signal_mode,
+                    "confirmation_bars": result.confirmation_bars,
+                    "atr_length": result.atr_length,
+                    "average_length": result.average_length,
+                    "absolute_reversal": result.absolute_reversal,
                     "score": result.score,
                     "win_rate": result.win_rate,
                     "profit_factor": result.profit_factor,
@@ -584,17 +642,24 @@ class OptimizerService:
                     "INSERT INTO agents "
                     "  (name, symbol, timeframe, trade_amount, balance, "
                     "   is_active, mode, sensitivity, signal_mode, "
-                    "   analysis_limit, created_at, updated_at) "
+                    "   confirmation_bars, atr_length, average_length, "
+                    "   absolute_reversal, analysis_limit, "
+                    "   created_at, updated_at) "
                     "VALUES "
                     "  (:name, :symbol, :tf, 100.0, 100.0, "
                     "   FALSE, 'paper', :sensitivity, :signal_mode, "
-                    "   500, NOW(), NOW())"
+                    "   :confirmation_bars, :atr_length, :average_length, "
+                    "   :absolute_reversal, 500, NOW(), NOW())"
                 ), {
                     "name": agent_name,
                     "symbol": symbol,
                     "tf": tf,
                     "sensitivity": result.sensitivity,
                     "signal_mode": result.signal_mode,
+                    "confirmation_bars": result.confirmation_bars,
+                    "atr_length": result.atr_length,
+                    "average_length": result.average_length,
+                    "absolute_reversal": result.absolute_reversal,
                 })
                 created.append({
                     "action": "created",
@@ -602,6 +667,10 @@ class OptimizerService:
                     "timeframe": tf,
                     "sensitivity": result.sensitivity,
                     "signal_mode": result.signal_mode,
+                    "confirmation_bars": result.confirmation_bars,
+                    "atr_length": result.atr_length,
+                    "average_length": result.average_length,
+                    "absolute_reversal": result.absolute_reversal,
                     "score": result.score,
                     "win_rate": result.win_rate,
                     "profit_factor": result.profit_factor,

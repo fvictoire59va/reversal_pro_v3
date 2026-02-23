@@ -133,6 +133,7 @@ class AnalysisService:
             atr_length=request.atr_length,
             average_length=request.average_length,
             confirmation_bars=request.confirmation_bars,
+            absolute_reversal=getattr(request, 'absolute_reversal', 0.5),
             generate_zones=request.show_zones,
             timeframe=request.timeframe,
         )

@@ -36,6 +36,11 @@ class AgentCrudMixin:
         sensitivity: str = "Medium",
         signal_mode: str = "Confirmed Only",
         analysis_limit: int = 500,
+        confirmation_bars: int = 0,
+        method: str = "average",
+        atr_length: int = 5,
+        average_length: int = 5,
+        absolute_reversal: float = 0.5,
     ) -> Agent:
         """Create a new agent with auto-generated name."""
         agent = Agent(
@@ -49,6 +54,11 @@ class AgentCrudMixin:
             sensitivity=sensitivity,
             signal_mode=signal_mode,
             analysis_limit=analysis_limit,
+            confirmation_bars=confirmation_bars,
+            method=method,
+            atr_length=atr_length,
+            average_length=average_length,
+            absolute_reversal=absolute_reversal,
         )
         db.add(agent)
         await db.flush()
@@ -62,6 +72,11 @@ class AgentCrudMixin:
             "trade_amount": trade_amount, "mode": mode,
             "sensitivity": sensitivity, "signal_mode": signal_mode,
             "analysis_limit": analysis_limit,
+            "confirmation_bars": confirmation_bars,
+            "method": method,
+            "atr_length": atr_length,
+            "average_length": average_length,
+            "absolute_reversal": absolute_reversal,
         })
 
         logger.info(f"Agent created: {agent.name} ({symbol} {timeframe} {mode} {sensitivity})")

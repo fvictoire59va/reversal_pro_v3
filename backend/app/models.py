@@ -128,6 +128,11 @@ class Agent(Base):
     sensitivity = Column(String(20), nullable=False, default="Medium")
     signal_mode = Column(String(30), nullable=False, default="Confirmed Only")
     analysis_limit = Column(Integer, nullable=False, default=500)
+    confirmation_bars = Column(Integer, nullable=False, default=0)
+    method = Column(String(20), nullable=False, default="average")
+    atr_length = Column(Integer, nullable=False, default=5)
+    average_length = Column(Integer, nullable=False, default=5)
+    absolute_reversal = Column(Float, nullable=False, default=0.5)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
     updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 

@@ -231,10 +231,18 @@ class AnalysisService:
         limit: int = 500,
         sensitivity: str = "Medium",
         signal_mode: str = "Confirmed Only",
+        confirmation_bars: int = 0,
+        method: str = "average",
+        atr_length: int = 5,
+        average_length: int = 5,
+        absolute_reversal: float = 0.5,
     ) -> ChartDataResponse:
         """Get data formatted for TradingView lightweight-charts."""
 
-        cache_key = f"chart:{symbol}:{timeframe}:{limit}:{sensitivity}:{signal_mode}"
+        cache_key = (
+            f"chart:{symbol}:{timeframe}:{limit}:{sensitivity}:{signal_mode}"
+            f":{confirmation_bars}:{method}:{atr_length}:{average_length}:{absolute_reversal}"
+        )
         cached = await cache_get(cache_key)
         if cached:
             return ChartDataResponse(**cached)
@@ -246,6 +254,11 @@ class AnalysisService:
             limit=limit,
             sensitivity=sensitivity,
             signal_mode=signal_mode,
+            confirmation_bars=confirmation_bars,
+            method=method,
+            atr_length=atr_length,
+            average_length=average_length,
+            absolute_reversal=absolute_reversal,
             show_zones=True,
         )
         analysis = await self.run_analysis(db, request)

@@ -34,6 +34,11 @@ async def get_chart_data(
     limit: int = Query(default=500, ge=50, le=5000),
     sensitivity: str = Query(default="Medium"),
     signal_mode: str = Query(default="Confirmed Only"),
+    confirmation_bars: int = Query(default=0, ge=0, le=5),
+    method: str = Query(default="average"),
+    atr_length: int = Query(default=5, ge=1, le=50),
+    average_length: int = Query(default=5, ge=1, le=50),
+    absolute_reversal: float = Query(default=0.5, ge=0.0, le=10.0),
     db: AsyncSession = Depends(get_db),
 ):
     """Get chart data formatted for TradingView lightweight-charts."""
@@ -45,6 +50,11 @@ async def get_chart_data(
             db, symbol=symbol, timeframe=timeframe,
             limit=limit, sensitivity=sensitivity,
             signal_mode=signal_mode,
+            confirmation_bars=confirmation_bars,
+            method=method,
+            atr_length=atr_length,
+            average_length=average_length,
+            absolute_reversal=absolute_reversal,
         )
         return data
     except ValueError as e:

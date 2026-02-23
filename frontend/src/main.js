@@ -12,6 +12,7 @@ import { ChartManager } from './chart.js';
 import {
     fetchChartData, fetchFromExchange, uploadCSV,
     getAgentPositionsForChart, getSkippedSignalsForChart,
+    getAgentParamsForTF,
 } from './api.js';
 import { esc } from './escapeHtml.js';
 import { state, dom, showLoading, setStatus } from './state.js';
@@ -24,16 +25,20 @@ function init() {
     state.chart = new ChartManager('chartContainer');
 
     // Event listeners
-    dom.symbolSelect.addEventListener('change', (e) => {
+    dom.symbolSelect.addEventListener('change', async (e) => {
         state.currentSymbol = e.target.value;
+        await syncAgentParams(state.currentSymbol, state.currentTimeframe);
         loadChart();
     });
 
-    dom.timeframeButtons.addEventListener('click', (e) => {
+    dom.timeframeButtons.addEventListener('click', async (e) => {
         if (e.target.classList.contains('tf-btn')) {
             document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
             e.target.classList.add('active');
             state.currentTimeframe = e.target.dataset.tf;
+
+            // Sync chart params with the agent configured for this TF
+            await syncAgentParams(state.currentSymbol, state.currentTimeframe);
             
             // Restart live mode with new timeframe interval
             if (state.isLiveMode) {
@@ -107,14 +112,45 @@ function init() {
     // Initial load
     setStatus('Ready — click Refresh or Fetch to load data');
 
-    // Auto-start live mode after short delay
-    setTimeout(() => startLiveMode(), 500);
+    // Sync initial params from agent for default TF, then auto-start live mode
+    syncAgentParams(state.currentSymbol, state.currentTimeframe).then(() => {
+        setTimeout(() => startLiveMode(), 500);
+    });
 
     // ── Agent Broker init ───────────────────────────────────
     initAgentBroker();
 
     // ── Performance Tree init ───────────────────────────────
     initPerfTree();
+}
+
+// ── Sync agent params for current TF ────────────────────────
+async function syncAgentParams(symbol, timeframe) {
+    try {
+        const params = await getAgentParamsForTF(symbol, timeframe);
+        if (!params) return;
+
+        // Update sensitivity & signal_mode UI selects
+        state.currentSensitivity = params.sensitivity;
+        state.currentSignalMode = params.signal_mode;
+        dom.sensitivitySelect.value = params.sensitivity;
+        dom.signalModeSelect.value = params.signal_mode;
+
+        // Update engine params
+        state.engineParams = {
+            confirmation_bars: params.confirmation_bars,
+            method: params.method,
+            atr_length: params.atr_length,
+            average_length: params.average_length,
+            absolute_reversal: params.absolute_reversal,
+        };
+
+        if (params.found) {
+            console.log(`Synced params from agent "${params.agent_name}" for ${timeframe}`);
+        }
+    } catch (err) {
+        console.warn('Could not sync agent params:', err);
+    }
 }
 
 // ── Load chart data ─────────────────────────────────────────
@@ -195,6 +231,7 @@ async function loadChart(retryOnFail = true) {
             state.currentLimit,
             state.currentSensitivity,
             state.currentSignalMode,
+            state.engineParams,
         );
 
         state.chart.setData(data);

@@ -14,6 +14,14 @@ export const state = {
     currentSensitivity: 'Medium',
     currentSignalMode: 'Confirmed Only',
     currentLimit: 500,
+    // Engine params (synced from agent on TF switch)
+    engineParams: {
+        confirmation_bars: 0,
+        method: 'average',
+        atr_length: 5,
+        average_length: 5,
+        absolute_reversal: 0.5,
+    },
     isLiveMode: false,
     liveInterval: null,
     knownSignalKeys: new Set(),

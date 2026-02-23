@@ -81,6 +81,49 @@ def _build_position_response(p, agent_name: str = "unknown") -> PositionResponse
     )
 
 
+# ── Agent params for chart sync ──────────────────────────────
+
+@router.get("/params/{symbol}/{timeframe}")
+async def get_agent_params_for_tf(
+    symbol: str,
+    timeframe: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the active agent's analysis params for a given symbol+timeframe.
+
+    If no agent exists for that pair, return default values.
+    """
+    symbol = symbol.replace('-', '/')
+    result = await db.execute(
+        select(Agent).where(Agent.symbol == symbol, Agent.timeframe == timeframe)
+    )
+    agent = result.scalars().first()
+
+    if agent:
+        return {
+            "found": True,
+            "agent_name": agent.name,
+            "sensitivity": agent.sensitivity,
+            "signal_mode": agent.signal_mode,
+            "confirmation_bars": agent.confirmation_bars,
+            "method": getattr(agent, 'method', 'average'),
+            "atr_length": agent.atr_length,
+            "average_length": agent.average_length,
+            "absolute_reversal": agent.absolute_reversal,
+        }
+    return {
+        "found": False,
+        "agent_name": None,
+        "sensitivity": "Medium",
+        "signal_mode": "Confirmed Only",
+        "confirmation_bars": 0,
+        "method": "average",
+        "atr_length": 5,
+        "average_length": 5,
+        "absolute_reversal": 0.5,
+    }
+
+
 # ── Agents CRUD ──────────────────────────────────────────────
 
 @router.get("/", response_model=AgentsOverview)

@@ -4,13 +4,20 @@
 
 const API_BASE = '/api/v1';
 
-export async function fetchChartData(symbol, timeframe, limit, sensitivity, signalMode) {
+export async function fetchChartData(symbol, timeframe, limit, sensitivity, signalMode, engineParams = {}) {
     const params = new URLSearchParams({
         limit: String(limit),
         sensitivity: sensitivity,
         signal_mode: signalMode,
         _t: Date.now(), // Cache-busting parameter
     });
+
+    // Append engine params if provided
+    if (engineParams.confirmation_bars !== undefined) params.set('confirmation_bars', String(engineParams.confirmation_bars));
+    if (engineParams.method) params.set('method', engineParams.method);
+    if (engineParams.atr_length !== undefined) params.set('atr_length', String(engineParams.atr_length));
+    if (engineParams.average_length !== undefined) params.set('average_length', String(engineParams.average_length));
+    if (engineParams.absolute_reversal !== undefined) params.set('absolute_reversal', String(engineParams.absolute_reversal));
 
     // Replace / with - for URL compatibility
     const urlSymbol = symbol.replace('/', '-');
@@ -64,6 +71,13 @@ export async function uploadCSV(file, symbol, timeframe) {
 }
 
 // ── Agent Broker API ────────────────────────────────────────
+
+export async function getAgentParamsForTF(symbol, timeframe) {
+    const urlSymbol = symbol.replace('/', '-');
+    const res = await fetch(`${API_BASE}/agents/params/${urlSymbol}/${timeframe}`);
+    if (!res.ok) return null;
+    return res.json();
+}
 
 export async function getAgentsOverview() {
     const res = await fetch(`${API_BASE}/agents/`);

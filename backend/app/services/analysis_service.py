@@ -476,7 +476,22 @@ class AnalysisService:
                 "detected_at": detected_at,
             })
 
-        # 3. Upsert signals in batch
+        # 3. Deduplicate by constraint key (time, symbol, timeframe, is_bullish)
+        #    In "confirmed + preview" mode the same candle may appear twice
+        #    (once confirmed, once preview). Keep confirmed over preview.
+        deduped: dict[tuple, dict] = {}
+        for val in upsert_values:
+            key = (val["time"], val["symbol"], val["timeframe"], val["is_bullish"])
+            existing_val = deduped.get(key)
+            if existing_val is None:
+                deduped[key] = val
+            elif existing_val["is_preview"] and not val["is_preview"]:
+                # confirmed wins over preview
+                deduped[key] = val
+            # else: keep existing (confirmed already in place, or both preview → keep first)
+        upsert_values = list(deduped.values())
+
+        # 4. Upsert signals in batch
         if upsert_values:
             stmt = pg_insert(Signal).values(upsert_values)
             stmt = stmt.on_conflict_do_update(
@@ -495,7 +510,7 @@ class AnalysisService:
             )
             await db.execute(stmt)
 
-        # 4. Delete stale signals no longer in the analysis result
+        # 5. Delete stale signals no longer in the analysis result
         #    Reuse existing_id_map from step 1 (no extra SELECT)
         if result.signals:
             ids_to_delete = [

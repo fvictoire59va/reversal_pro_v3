@@ -24,6 +24,9 @@ from ..services.zigzag_service import ZigZagService
 from ..services.reversal_detector import ReversalDetector
 from ..services.supply_demand_service import SupplyDemandService
 from ..services.matrix_profile_service import MatrixProfileService
+from ..services.volume_adaptive_service import VolumeAdaptiveService
+from ..services.candle_pattern_service import CandlePatternService
+from ..services.cusum_service import CUSUMService
 
 
 class DetectReversalsUseCase:
@@ -33,11 +36,14 @@ class DetectReversalsUseCase:
     This orchestrates the entire pipeline:
     1. Compute ATR
     2. Compute reversal thresholds
+    2b. (Optional) Matrix Profile regime-change threshold reduction
+    2c. (Optional) Volume-adaptive threshold reduction
+    2d. (Optional) Candlestick pattern threshold reduction
+    2e. (Optional) CUSUM change-point threshold reduction
     3. Run zigzag to find pivots
     4. Detect reversal signals from pivots
     5. Generate supply/demand zones
     6. Compute EMA trend
-    7. (Optional) Matrix Profile regime-change detection
     """
 
     def __init__(
@@ -67,6 +73,22 @@ class DetectReversalsUseCase:
         mp_cac_threshold: float = 1.8,
         mp_min_reduction: float = 0.40,
         mp_score_decay_bars: int = 6,
+        # Volume-adaptive params
+        use_volume_adaptive: bool = True,
+        va_lookback: int = 20,
+        va_min_reduction: float = 0.50,
+        va_spike_mult: float = 1.5,
+        # Candle-pattern params
+        use_candle_patterns: bool = True,
+        cp_engulfing_reduction: float = 0.50,
+        cp_hammer_reduction: float = 0.65,
+        cp_doji_reduction: float = 0.80,
+        # CUSUM params
+        use_cusum: bool = True,
+        cusum_drift: float = 0.5,
+        cusum_threshold: float = 3.0,
+        cusum_min_reduction: float = 0.45,
+        cusum_decay_bars: int = 5,
     ):
         # Resolve sensitivity config (with timeframe-adaptive ATR scaling)
         if sensitivity == SensitivityPreset.CUSTOM:
@@ -91,6 +113,9 @@ class DetectReversalsUseCase:
         self.ema_slow = ema_slow
         self.generate_zones_flag = generate_zones
         self.use_matrix_profile = use_matrix_profile
+        self.use_volume_adaptive = use_volume_adaptive
+        self.use_candle_patterns = use_candle_patterns
+        self.use_cusum = use_cusum
 
         # Services
         self.atr_service = ATRService()
@@ -122,6 +147,34 @@ class DetectReversalsUseCase:
                 # stumpy not installed — graceful fallback
                 self.mp_service = None
 
+        # Volume-adaptive service
+        self.volume_adaptive_service: Optional[VolumeAdaptiveService] = None
+        if self.use_volume_adaptive:
+            self.volume_adaptive_service = VolumeAdaptiveService(
+                lookback=va_lookback,
+                min_reduction=va_min_reduction,
+                volume_spike_mult=va_spike_mult,
+            )
+
+        # Candle-pattern service
+        self.candle_pattern_service: Optional[CandlePatternService] = None
+        if self.use_candle_patterns:
+            self.candle_pattern_service = CandlePatternService(
+                engulfing_reduction=cp_engulfing_reduction,
+                hammer_reduction=cp_hammer_reduction,
+                doji_reduction=cp_doji_reduction,
+            )
+
+        # CUSUM service
+        self.cusum_service: Optional[CUSUMService] = None
+        if self.use_cusum:
+            self.cusum_service = CUSUMService(
+                drift_fraction=cusum_drift,
+                threshold_mult=cusum_threshold,
+                min_reduction=cusum_min_reduction,
+                decay_bars=cusum_decay_bars,
+            )
+
     def execute(self, bars: List[OHLCVBar]) -> AnalysisResult:
         """
         Run the full analysis pipeline on a list of OHLCV bars.
@@ -138,9 +191,11 @@ class DetectReversalsUseCase:
             return AnalysisResult()
 
         n = len(bars)
+        opens = np.array([b.open for b in bars], dtype=float)
         highs = np.array([b.high for b in bars], dtype=float)
         lows = np.array([b.low for b in bars], dtype=float)
         closes = np.array([b.close for b in bars], dtype=float)
+        volumes = np.array([b.volume for b in bars], dtype=float)
 
         # ── Step 1: ATR ──────────────────────────────────────────────
         atr_values = self.atr_service.atr(
@@ -195,6 +250,31 @@ class DetectReversalsUseCase:
             except Exception:
                 # Gracefully fall back — the base pipeline still runs
                 pass
+
+        # ── Step 2c: Volume-adaptive threshold reduction ─────────────
+        # High volume on a move makes the pivot more significant,
+        # so we can confirm it with a lower reversal threshold.
+        if self.volume_adaptive_service is not None:
+            va_reduction = self.volume_adaptive_service.compute_reduction(volumes)
+            reversal_amounts = reversal_amounts * va_reduction
+
+        # ── Step 2d: Candlestick pattern threshold reduction ─────────
+        # Classic reversal patterns (engulfing, hammer, doji) allow
+        # earlier pivot confirmation by 1–3 candles.
+        if self.candle_pattern_service is not None:
+            cp_reduction = self.candle_pattern_service.compute_reduction(
+                opens, highs, lows, closes
+            )
+            reversal_amounts = reversal_amounts * cp_reduction
+
+        # ── Step 2e: CUSUM change-point threshold reduction ──────────
+        # Accumulates small deviations to detect structural shifts
+        # 3–8 candles before the ZigZag would.
+        if self.cusum_service is not None:
+            cusum_reduction = self.cusum_service.compute_reduction(
+                closes, atr_values
+            )
+            reversal_amounts = reversal_amounts * cusum_reduction
 
         # ── Step 3: ZigZag pivots ────────────────────────────────────
         confirmed_pivots: List[Pivot] = []

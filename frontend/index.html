@@ -335,6 +335,39 @@
                         <option value="1.0">1.0</option>
                     </select>
                 </div>
+                <!-- Vol. Adaptatif -->
+                <div class="opti-cfg-row">
+                    <label class="opti-cfg-check">
+                        <input type="checkbox" id="optLockVA" />
+                        <span>Vol. Adaptatif</span>
+                    </label>
+                    <select id="optVAValue" disabled>
+                        <option value="true" selected>Activé</option>
+                        <option value="false">Désactivé</option>
+                    </select>
+                </div>
+                <!-- Patterns Candle -->
+                <div class="opti-cfg-row">
+                    <label class="opti-cfg-check">
+                        <input type="checkbox" id="optLockCP" />
+                        <span>Patterns Candle</span>
+                    </label>
+                    <select id="optCPValue" disabled>
+                        <option value="true" selected>Activé</option>
+                        <option value="false">Désactivé</option>
+                    </select>
+                </div>
+                <!-- CUSUM -->
+                <div class="opti-cfg-row">
+                    <label class="opti-cfg-check">
+                        <input type="checkbox" id="optLockCU" />
+                        <span>CUSUM</span>
+                    </label>
+                    <select id="optCUValue" disabled>
+                        <option value="true" selected>Activé</option>
+                        <option value="false">Désactivé</option>
+                    </select>
+                </div>
             </div>
             <div id="optComboCount" style="font-size:0.8rem;color:var(--text-secondary);margin:8px 0"></div>
             <div style="display:flex;gap:8px;margin-top:6px">

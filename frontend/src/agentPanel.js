@@ -142,6 +142,9 @@ const _GRID = {
     atr_length:        [3,5,7],
     average_length:    [3,5,7],
     absolute_reversal: [0.3,0.5,0.8],
+    use_volume_adaptive: [true, false],
+    use_candle_patterns: [true, false],
+    use_cusum:           [true, false],
 };
 
 function initOptimizerConfigPanel() {
@@ -154,6 +157,9 @@ function initOptimizerConfigPanel() {
         ['optLockAtr',  'optAtrValue'],
         ['optLockAvg',  'optAvgValue'],
         ['optLockAbs',  'optAbsValue'],
+        ['optLockVA',   'optVAValue'],
+        ['optLockCP',   'optCPValue'],
+        ['optLockCU',   'optCUValue'],
     ];
     for (const [cbId, valId] of pairs) {
         const cb = document.getElementById(cbId);
@@ -189,7 +195,10 @@ function updateComboCount() {
         * l(document.getElementById('optLockCb')?.checked,    'confirmation_bars')
         * l(document.getElementById('optLockAtr')?.checked,   'atr_length')
         * l(document.getElementById('optLockAvg')?.checked,   'average_length')
-        * l(document.getElementById('optLockAbs')?.checked,   'absolute_reversal');
+        * l(document.getElementById('optLockAbs')?.checked,   'absolute_reversal')
+        * l(document.getElementById('optLockVA')?.checked,    'use_volume_adaptive')
+        * l(document.getElementById('optLockCP')?.checked,    'use_candle_patterns')
+        * l(document.getElementById('optLockCU')?.checked,    'use_cusum');
 
     const el = document.getElementById('optComboCount');
     if (el) el.textContent = `≈ ${combos.toLocaleString()} combinaisons`;
@@ -213,6 +222,12 @@ function getFixedParams() {
         p.average_length = parseInt(document.getElementById('optAvgValue').value, 10);
     if (document.getElementById('optLockAbs')?.checked)
         p.absolute_reversal = parseFloat(document.getElementById('optAbsValue').value);
+    if (document.getElementById('optLockVA')?.checked)
+        p.use_volume_adaptive = document.getElementById('optVAValue').value === 'true';
+    if (document.getElementById('optLockCP')?.checked)
+        p.use_candle_patterns = document.getElementById('optCPValue').value === 'true';
+    if (document.getElementById('optLockCU')?.checked)
+        p.use_cusum = document.getElementById('optCUValue').value === 'true';
     return p;
 }
 
@@ -328,6 +343,9 @@ function updateOptimizerUI(progress) {
                 <div class="params">🎯 ${esc(r.sensitivity)} · 📡 ${esc(r.signal_mode)}</div>
                 <div class="params" style="font-size:0.72rem">
                     CB=${r.confirmation_bars} · ATR=${r.atr_length} · AVG=${r.average_length} · AbsR=${r.absolute_reversal}
+                </div>
+                <div class="params" style="font-size:0.72rem">
+                    Vol.${r.use_volume_adaptive ? '✅' : '❌'} · Pat.${r.use_candle_patterns ? '✅' : '❌'} · CU.${r.use_cusum ? '✅' : '❌'}
                 </div>
                 <div class="stats">
                     ${r.total_trades} trades · WR ${r.win_rate}% · PF ${r.profit_factor}

@@ -145,6 +145,9 @@ CREATE TABLE IF NOT EXISTS agents (
     atr_length      INTEGER NOT NULL DEFAULT 5,
     average_length  INTEGER NOT NULL DEFAULT 5,
     absolute_reversal DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    use_volume_adaptive BOOLEAN NOT NULL DEFAULT TRUE,
+    use_candle_patterns BOOLEAN NOT NULL DEFAULT TRUE,
+    use_cusum           BOOLEAN NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

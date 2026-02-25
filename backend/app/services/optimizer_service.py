@@ -38,6 +38,18 @@ CONFIRMATION_BARS_GRID = [0, 1, 2]
 ATR_LENGTHS = [3, 5, 7]
 AVERAGE_LENGTHS = [3, 5, 7]
 ABSOLUTE_REVERSALS = [0.3, 0.5, 0.8]
+# Latency-reduction methodology grid
+LATENCY_REDUCTION_GRID = [
+    # (use_volume_adaptive, use_candle_patterns, use_cusum)
+    (False, False, False),   # baseline — no reduction
+    (True,  True,  True),    # all enabled
+    (True,  False, False),   # volume only
+    (False, True,  False),   # candle patterns only
+    (False, False, True),    # CUSUM only
+    (True,  True,  False),   # volume + candle
+    (True,  False, True),    # volume + CUSUM
+    (False, True,  True),    # candle + CUSUM
+]
 # method stays fixed at "average" (not worth grid-searching)
 
 # SL/TP params per TF (mirrors risk_manager.TF_PARAMS)
@@ -94,6 +106,9 @@ class BacktestResult:
     atr_length: int = 5
     average_length: int = 5
     absolute_reversal: float = 0.5
+    use_volume_adaptive: bool = True
+    use_candle_patterns: bool = True
+    use_cusum: bool = True
     total_trades: int = 0
     winners: int = 0
     losers: int = 0
@@ -132,6 +147,9 @@ def _run_backtest(
     atr_length: int = 5,
     average_length: int = 5,
     absolute_reversal: float = 0.5,
+    use_volume_adaptive: bool = True,
+    use_candle_patterns: bool = True,
+    use_cusum: bool = True,
     trade_amount: float = 100.0,
 ) -> BacktestResult:
     """
@@ -148,6 +166,9 @@ def _run_backtest(
             timeframe=timeframe, confirmation_bars=confirmation_bars,
             atr_length=atr_length, average_length=average_length,
             absolute_reversal=absolute_reversal,
+            use_volume_adaptive=use_volume_adaptive,
+            use_candle_patterns=use_candle_patterns,
+            use_cusum=use_cusum,
         )
 
     # Run analysis engine
@@ -163,6 +184,9 @@ def _run_backtest(
             generate_zones=False,
             timeframe=timeframe,
             use_matrix_profile=False,
+            use_volume_adaptive=use_volume_adaptive,
+            use_candle_patterns=use_candle_patterns,
+            use_cusum=use_cusum,
         )
         result = use_case.execute(bars)
     except Exception as e:
@@ -172,6 +196,9 @@ def _run_backtest(
             timeframe=timeframe, confirmation_bars=confirmation_bars,
             atr_length=atr_length, average_length=average_length,
             absolute_reversal=absolute_reversal,
+            use_volume_adaptive=use_volume_adaptive,
+            use_candle_patterns=use_candle_patterns,
+            use_cusum=use_cusum,
         )
 
     signals = result.signals
@@ -181,6 +208,9 @@ def _run_backtest(
             timeframe=timeframe, confirmation_bars=confirmation_bars,
             atr_length=atr_length, average_length=average_length,
             absolute_reversal=absolute_reversal,
+            use_volume_adaptive=use_volume_adaptive,
+            use_candle_patterns=use_candle_patterns,
+            use_cusum=use_cusum,
         )
 
     # ATR values for SL calculation
@@ -352,6 +382,9 @@ def _run_backtest(
             timeframe=timeframe, confirmation_bars=confirmation_bars,
             atr_length=atr_length, average_length=average_length,
             absolute_reversal=absolute_reversal,
+            use_volume_adaptive=use_volume_adaptive,
+            use_candle_patterns=use_candle_patterns,
+            use_cusum=use_cusum,
         )
 
     # Compute statistics
@@ -407,6 +440,9 @@ def _run_backtest(
         atr_length=atr_length,
         average_length=average_length,
         absolute_reversal=absolute_reversal,
+        use_volume_adaptive=use_volume_adaptive,
+        use_candle_patterns=use_candle_patterns,
+        use_cusum=use_cusum,
         total_trades=len(trades),
         winners=winners,
         losers=losers,
@@ -554,17 +590,34 @@ class OptimizerService:
                     if "absolute_reversal" in fixed_params
                     else ABSOLUTE_REVERSALS)
 
+        # Latency-reduction methodology grid
+        # When a boolean is locked, use a single-element list with the
+        # locked (True/False) tuple.  Otherwise explore all combos.
+        _va = fixed_params.get("use_volume_adaptive")
+        _cp = fixed_params.get("use_candle_patterns")
+        _cu = fixed_params.get("use_cusum")
+        if _va is not None or _cp is not None or _cu is not None:
+            # At least one methodology is locked — build a single combo
+            lr_grid = [(
+                _va if _va is not None else True,
+                _cp if _cp is not None else True,
+                _cu if _cu is not None else True,
+            )]
+        else:
+            lr_grid = LATENCY_REDUCTION_GRID
+
         combos_per_tf = (
             len(sens_grid) * len(mode_grid) * len(cb_grid)
             * len(atr_grid) * len(avg_grid) * len(abs_grid)
+            * len(lr_grid)
         )
         total_combos = len(tf_grid) * combos_per_tf
 
         logger.info("[OPTIMIZER] Grid: %d TF × %d sens × %d mode × "
-                    "%d cb × %d atr × %d avg × %d abs = %d combos",
+                    "%d cb × %d atr × %d avg × %d abs × %d lr = %d combos",
                     len(tf_grid), len(sens_grid), len(mode_grid),
                     len(cb_grid), len(atr_grid), len(avg_grid),
-                    len(abs_grid), total_combos)
+                    len(abs_grid), len(lr_grid), total_combos)
 
         progress = OptimizationProgress(
             status="running",
@@ -600,6 +653,7 @@ class OptimizerService:
                             for atr_len in atr_grid:
                                 for avg_len in avg_grid:
                                     for abs_rev in abs_grid:
+                                      for (va, cp, cu) in lr_grid:
                                         combo_idx += 1
                                         progress.current_combo = combo_idx
                                         progress.elapsed_seconds = round(
@@ -616,6 +670,9 @@ class OptimizerService:
                                                 atr_length=atr_len,
                                                 average_length=avg_len,
                                                 absolute_reversal=abs_rev,
+                                                use_volume_adaptive=va,
+                                                use_candle_patterns=cp,
+                                                use_cusum=cu,
                                             ),
                                         )
 
@@ -710,6 +767,9 @@ class OptimizerService:
                     "  atr_length = :atr_length, "
                     "  average_length = :average_length, "
                     "  absolute_reversal = :absolute_reversal, "
+                    "  use_volume_adaptive = :use_volume_adaptive, "
+                    "  use_candle_patterns = :use_candle_patterns, "
+                    "  use_cusum = :use_cusum, "
                     "  is_active = FALSE, "
                     "  updated_at = NOW() "
                     "WHERE id = :id"
@@ -720,6 +780,9 @@ class OptimizerService:
                     "atr_length": result.atr_length,
                     "average_length": result.average_length,
                     "absolute_reversal": result.absolute_reversal,
+                    "use_volume_adaptive": result.use_volume_adaptive,
+                    "use_candle_patterns": result.use_candle_patterns,
+                    "use_cusum": result.use_cusum,
                     "id": existing_row[0],
                 })
                 created.append({
@@ -733,6 +796,9 @@ class OptimizerService:
                     "atr_length": result.atr_length,
                     "average_length": result.average_length,
                     "absolute_reversal": result.absolute_reversal,
+                    "use_volume_adaptive": result.use_volume_adaptive,
+                    "use_candle_patterns": result.use_candle_patterns,
+                    "use_cusum": result.use_cusum,
                     "score": result.score,
                     "win_rate": result.win_rate,
                     "profit_factor": result.profit_factor,
@@ -756,13 +822,15 @@ class OptimizerService:
                     "  (name, symbol, timeframe, trade_amount, balance, "
                     "   is_active, mode, sensitivity, signal_mode, "
                     "   confirmation_bars, atr_length, average_length, "
-                    "   absolute_reversal, analysis_limit, "
+                    "   absolute_reversal, use_volume_adaptive, "
+                    "   use_candle_patterns, use_cusum, analysis_limit, "
                     "   created_at, updated_at) "
                     "VALUES "
                     "  (:name, :symbol, :tf, 100.0, 100.0, "
                     "   FALSE, 'paper', :sensitivity, :signal_mode, "
                     "   :confirmation_bars, :atr_length, :average_length, "
-                    "   :absolute_reversal, 500, NOW(), NOW())"
+                    "   :absolute_reversal, :use_volume_adaptive, "
+                    "   :use_candle_patterns, :use_cusum, 500, NOW(), NOW())"
                 ), {
                     "name": agent_name,
                     "symbol": symbol,
@@ -773,6 +841,9 @@ class OptimizerService:
                     "atr_length": result.atr_length,
                     "average_length": result.average_length,
                     "absolute_reversal": result.absolute_reversal,
+                    "use_volume_adaptive": result.use_volume_adaptive,
+                    "use_candle_patterns": result.use_candle_patterns,
+                    "use_cusum": result.use_cusum,
                 })
                 created.append({
                     "action": "created",
@@ -784,6 +855,9 @@ class OptimizerService:
                     "atr_length": result.atr_length,
                     "average_length": result.average_length,
                     "absolute_reversal": result.absolute_reversal,
+                    "use_volume_adaptive": result.use_volume_adaptive,
+                    "use_candle_patterns": result.use_candle_patterns,
+                    "use_cusum": result.use_cusum,
                     "score": result.score,
                     "win_rate": result.win_rate,
                     "profit_factor": result.profit_factor,

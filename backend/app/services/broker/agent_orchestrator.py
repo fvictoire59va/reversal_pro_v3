@@ -78,6 +78,9 @@ class AgentOrchestratorMixin:
                     method=getattr(agent, 'method', 'average'),
                     atr_length=getattr(agent, 'atr_length', 5),
                     average_length=getattr(agent, 'average_length', 5),
+                    use_volume_adaptive=getattr(agent, 'use_volume_adaptive', True),
+                    use_candle_patterns=getattr(agent, 'use_candle_patterns', True),
+                    use_cusum=getattr(agent, 'use_cusum', True),
                 )
                 from ..analysis_service import analysis_service
                 await analysis_service.run_analysis(db, request)
@@ -107,6 +110,9 @@ class AgentOrchestratorMixin:
                             method=getattr(agent, 'method', 'average'),
                             atr_length=getattr(agent, 'atr_length', 5),
                             average_length=getattr(agent, 'average_length', 5),
+                            use_volume_adaptive=getattr(agent, 'use_volume_adaptive', True),
+                            use_candle_patterns=getattr(agent, 'use_candle_patterns', True),
+                            use_cusum=getattr(agent, 'use_cusum', True),
                         )
                         await analysis_service.run_analysis(db, htf_request)
                         logger.debug(f"[{agent.name}] HTF {htf} data fetched & analysis refreshed")

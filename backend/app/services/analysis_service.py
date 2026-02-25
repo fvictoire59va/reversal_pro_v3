@@ -136,6 +136,9 @@ class AnalysisService:
             absolute_reversal=getattr(request, 'absolute_reversal', 0.5),
             generate_zones=request.show_zones,
             timeframe=request.timeframe,
+            use_volume_adaptive=getattr(request, 'use_volume_adaptive', True),
+            use_candle_patterns=getattr(request, 'use_candle_patterns', True),
+            use_cusum=getattr(request, 'use_cusum', True),
         )
 
         result = use_case.execute(core_bars)

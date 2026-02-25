@@ -35,6 +35,7 @@ async def start_optimization(
     for key in (
         "sensitivity", "signal_mode", "confirmation_bars",
         "atr_length", "average_length", "absolute_reversal", "timeframes",
+        "use_volume_adaptive", "use_candle_patterns", "use_cusum",
     ):
         val = getattr(body, key, None)
         if val is not None:

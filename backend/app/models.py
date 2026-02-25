@@ -133,6 +133,9 @@ class Agent(Base):
     atr_length = Column(Integer, nullable=False, default=5)
     average_length = Column(Integer, nullable=False, default=5)
     absolute_reversal = Column(Float, nullable=False, default=0.5)
+    use_volume_adaptive = Column(Boolean, nullable=False, default=True)
+    use_candle_patterns = Column(Boolean, nullable=False, default=True)
+    use_cusum = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
     updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 

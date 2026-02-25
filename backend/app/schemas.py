@@ -65,6 +65,9 @@ class AnalysisRequest(BaseModel):
     atr_length: int = Field(default=5, ge=1, le=50)
     average_length: int = Field(default=5, ge=1, le=50)
     absolute_reversal: float = Field(default=0.5, ge=0.0, le=10.0)
+    use_volume_adaptive: bool = True
+    use_candle_patterns: bool = True
+    use_cusum: bool = True
     show_zones: bool = True
 
 
@@ -262,4 +265,8 @@ class OptimizerStartRequest(BaseModel):
     atr_length: Optional[int] = None
     average_length: Optional[int] = None
     absolute_reversal: Optional[float] = None
+    # Latency-reduction methodologies (True/False to lock, None to grid-search)
+    use_volume_adaptive: Optional[bool] = None
+    use_candle_patterns: Optional[bool] = None
+    use_cusum: Optional[bool] = None
     timeframes: Optional[List[str]] = None

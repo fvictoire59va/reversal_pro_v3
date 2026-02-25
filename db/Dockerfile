@@ -11,6 +11,7 @@ COPY db/migrate_add_unrealized_pnl.sql /scripts/07_migrate_add_unrealized_pnl.sq
 COPY db/migrate_add_partial_tp_breakeven.sql /scripts/08_migrate_add_partial_tp_breakeven.sql
 COPY db/migrate_add_trailing_stop.sql /scripts/09_migrate_add_trailing_stop.sql
 COPY db/migrate_add_engine_params.sql /scripts/10_migrate_add_engine_params.sql
+COPY db/migrate_add_latency_reduction.sql /scripts/11_migrate_add_latency_reduction.sql
 
 COPY db/run-migrations.sh /scripts/run-migrations.sh
 RUN chmod +x /scripts/run-migrations.sh

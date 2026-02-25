@@ -503,11 +503,19 @@ class OptimizerService:
 
     def __init__(self):
         self._running = False
+        self._cancel_requested = False
         self._task: Optional[asyncio.Task] = None
 
     @property
     def is_running(self) -> bool:
         return self._running
+
+    async def cancel(self):
+        """Request cancellation of the running optimization."""
+        if not self._running:
+            return
+        logger.info("[OPTIMIZER] Cancellation requested")
+        self._cancel_requested = True
 
     async def get_progress(self) -> OptimizationProgress:
         """Read current progress from Redis."""
@@ -533,6 +541,7 @@ class OptimizerService:
         logger.info("[OPTIMIZER] Starting optimization for %s (fixed=%s)",
                     symbol, fixed_params)
         self._running = True
+        self._cancel_requested = False
         self._task = asyncio.create_task(
             self._safe_run(db_factory, symbol, fixed_params or {})
         )
@@ -655,6 +664,20 @@ class OptimizerService:
                                     for abs_rev in abs_grid:
                                       for (va, cp, cu) in lr_grid:
                                         combo_idx += 1
+
+                                        # ── Check for cancellation ──
+                                        if self._cancel_requested:
+                                            progress.status = "cancelled"
+                                            progress.elapsed_seconds = round(
+                                                time.perf_counter() - t0, 1
+                                            )
+                                            await self._save_progress(progress)
+                                            logger.info(
+                                                "[OPTIMIZER] Cancelled at combo %d/%d",
+                                                combo_idx, total_combos,
+                                            )
+                                            return
+
                                         progress.current_combo = combo_idx
                                         progress.elapsed_seconds = round(
                                             time.perf_counter() - t0, 1

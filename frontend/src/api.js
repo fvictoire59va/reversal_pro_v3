@@ -198,3 +198,12 @@ export async function getOptimizationProgress() {
     if (!res.ok) return { status: 'error' };
     return res.json();
 }
+
+export async function cancelOptimization() {
+    const res = await fetch(`${API_BASE}/optimizer/cancel`, { method: 'POST' });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Cancel error ${res.status}`);
+    }
+    return res.json();
+}

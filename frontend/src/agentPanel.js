@@ -7,7 +7,7 @@ import { state, setStatus } from './state.js';
 import {
     getAgentsOverview, createAgent, deleteAgent, toggleAgent,
     closePosition, getAgentPositionsForChart, resetAgentHistory,
-    startOptimization, getOptimizationProgress,
+    startOptimization, getOptimizationProgress, cancelOptimization,
 } from './api.js';
 import { updatePerfAgentSelect } from './perfTree.js';
 import { esc, escAttr } from './escapeHtml.js';
@@ -62,6 +62,21 @@ export function initAgentBroker() {
     if (optimizerCloseBtn) {
         optimizerCloseBtn.addEventListener('click', () => {
             document.getElementById('optimizerPanel').style.display = 'none';
+        });
+    }
+    const optimizerStopBtn = document.getElementById('optimizerStopBtn');
+    if (optimizerStopBtn) {
+        optimizerStopBtn.addEventListener('click', async () => {
+            try {
+                optimizerStopBtn.disabled = true;
+                optimizerStopBtn.textContent = '⏳ Arrêt...';
+                await cancelOptimization();
+                setStatus('Arrêt de l\'optimisation demandé...');
+            } catch (err) {
+                setStatus(`Erreur arrêt: ${err.message}`, true);
+                optimizerStopBtn.disabled = false;
+                optimizerStopBtn.textContent = '⏹ Stop';
+            }
             if (optimizerPollInterval) {
                 clearInterval(optimizerPollInterval);
                 optimizerPollInterval = null;
@@ -272,6 +287,13 @@ async function checkRunningOptimization() {
 
 function showOptimizerPanel() {
     document.getElementById('optimizerPanel').style.display = 'block';
+    // Show the stop button when optimizer panel opens
+    const stopBtn = document.getElementById('optimizerStopBtn');
+    if (stopBtn) {
+        stopBtn.style.display = '';
+        stopBtn.disabled = false;
+        stopBtn.textContent = '⏹ Stop';
+    }
 }
 
 function startOptimizerPolling() {
@@ -281,16 +303,26 @@ function startOptimizerPolling() {
             const progress = await getOptimizationProgress();
             updateOptimizerUI(progress);
 
-            if (progress.status === 'done' || progress.status === 'error') {
+            if (progress.status === 'done' || progress.status === 'error' || progress.status === 'cancelled') {
                 clearInterval(optimizerPollInterval);
                 optimizerPollInterval = null;
                 const btn = document.getElementById('optimizerBtn');
                 btn.classList.remove('running');
                 btn.textContent = '🧪 Optimiser';
 
+                // Reset stop button
+                const stopBtn = document.getElementById('optimizerStopBtn');
+                if (stopBtn) {
+                    stopBtn.disabled = false;
+                    stopBtn.textContent = '⏹ Stop';
+                    stopBtn.style.display = 'none';
+                }
+
                 if (progress.status === 'done') {
                     setStatus(`Optimisation terminée en ${progress.elapsed_seconds}s`);
                     await loadAgentsOverview();
+                } else if (progress.status === 'cancelled') {
+                    setStatus(`Optimisation annulée après ${progress.elapsed_seconds}s`);
                 } else {
                     setStatus(`Erreur optimisation: ${progress.error}`, true);
                 }
@@ -314,6 +346,8 @@ function updateOptimizerUI(progress) {
         statusText = `Analyse ${progress.current_tf || '...'} — ${progress.current_combo}/${progress.total_combos} combinaisons (${progress.elapsed_seconds}s)`;
     } else if (progress.status === 'done') {
         statusText = `✅ Terminé en ${progress.elapsed_seconds}s`;
+    } else if (progress.status === 'cancelled') {
+        statusText = `⏹ Annulé après ${progress.elapsed_seconds}s`;
     } else if (progress.status === 'error') {
         statusText = `❌ Erreur: ${progress.error}`;
     }

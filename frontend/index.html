@@ -380,7 +380,10 @@
         <div class="optimizer-panel" id="optimizerPanel" style="display: none;">
             <div class="optimizer-header">
                 <span class="optimizer-title">🧪 Optimisation en cours</span>
-                <button class="optimizer-close" id="optimizerCloseBtn">✕</button>
+                <div style="display:flex;gap:6px;align-items:center">
+                    <button class="btn btn-outline btn-sm" id="optimizerStopBtn" title="Arrêter l'optimisation">⏹ Stop</button>
+                    <button class="optimizer-close" id="optimizerCloseBtn">✕</button>
+                </div>
             </div>
             <div class="optimizer-progress">
                 <div class="optimizer-bar-container">

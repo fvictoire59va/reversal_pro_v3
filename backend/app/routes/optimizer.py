@@ -53,6 +53,15 @@ async def start_optimization(
     }
 
 
+@router.post("/cancel")
+async def cancel_optimization():
+    """Cancel a running optimization."""
+    if not optimizer_service.is_running:
+        raise HTTPException(409, "No optimization is running")
+    await optimizer_service.cancel()
+    return {"status": "cancelling", "message": "Cancellation requested"}
+
+
 @router.get("/progress")
 async def get_optimization_progress():
     """Poll current optimization progress."""

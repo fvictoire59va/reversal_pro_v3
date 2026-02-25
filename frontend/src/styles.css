@@ -223,11 +223,21 @@ body {
     border-color: var(--blue, #4488ff);
 }
 .btn-optimizer.running {
-    animation: pulse-blue 1.5s infinite;
-    border-color: var(--blue, #4488ff);
-    color: var(--blue, #4488ff);
+    animation: pulse-red 1.5s infinite;
+    border-color: var(--red, #ff4466);
+    color: var(--red, #ff4466);
+    background: rgba(255, 68, 102, 0.1);
+}
+.btn-optimizer.running:hover {
+    background: var(--red, #ff4466);
+    color: #fff;
+    border-color: var(--red, #ff4466);
 }
 @keyframes pulse-blue {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+@keyframes pulse-red {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
 }

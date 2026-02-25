@@ -53,10 +53,10 @@ export function initAgentBroker() {
         resetHistoryBtn.addEventListener('click', handleResetHistory);
     }
 
-    // Optimizer button → show config panel
+    // Optimizer button → show config panel OR stop optimization
     const optimizerBtn = document.getElementById('optimizerBtn');
     if (optimizerBtn) {
-        optimizerBtn.addEventListener('click', handleShowOptimizerConfig);
+        optimizerBtn.addEventListener('click', handleOptimizerBtnClick);
     }
     const optimizerCloseBtn = document.getElementById('optimizerCloseBtn');
     if (optimizerCloseBtn) {
@@ -246,9 +246,33 @@ function getFixedParams() {
     return p;
 }
 
+function handleOptimizerBtnClick() {
+    const btn = document.getElementById('optimizerBtn');
+    if (btn.classList.contains('running')) {
+        // Optimization is running → stop it
+        handleStopOptimization();
+    } else {
+        handleShowOptimizerConfig();
+    }
+}
+
 function handleShowOptimizerConfig() {
     updateComboCount();
     document.getElementById('optimizerConfigPanel').style.display = 'block';
+}
+
+async function handleStopOptimization() {
+    const btn = document.getElementById('optimizerBtn');
+    try {
+        btn.disabled = true;
+        btn.textContent = '⏳ Arrêt...';
+        await cancelOptimization();
+        setStatus('Arrêt de l\'optimisation demandé...');
+    } catch (err) {
+        setStatus(`Erreur arrêt: ${err.message}`, true);
+        btn.disabled = false;
+        btn.textContent = '⏹ Stop Optim.';
+    }
 }
 
 async function handleLaunchOptimizer() {
@@ -258,7 +282,7 @@ async function handleLaunchOptimizer() {
     const btn = document.getElementById('optimizerBtn');
     try {
         btn.classList.add('running');
-        btn.textContent = '⏳ Optimisation...';
+        btn.textContent = '⏹ Stop Optim.';
         setStatus('Lancement de l\'optimisation...');
 
         await startOptimization(state.currentSymbol, fixedParams);
@@ -277,7 +301,7 @@ async function checkRunningOptimization() {
         if (progress.status === 'running') {
             const btn = document.getElementById('optimizerBtn');
             btn.classList.add('running');
-            btn.textContent = '⏳ Optimisation...';
+            btn.textContent = '⏹ Stop Optim.';
             showOptimizerPanel();
             updateOptimizerUI(progress);
             startOptimizerPolling();
@@ -308,6 +332,7 @@ function startOptimizerPolling() {
                 optimizerPollInterval = null;
                 const btn = document.getElementById('optimizerBtn');
                 btn.classList.remove('running');
+                btn.disabled = false;
                 btn.textContent = '🧪 Optimiser';
 
                 // Reset stop button
